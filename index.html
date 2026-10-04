@@ -46,7 +46,7 @@ const seed={
  {name:'Side Pressure',type:'Arm B',weight:0,sets:4,reps:6,rpeMin:6,rpeMax:7,rule:'ARM'}]}
  ],
  available:{MON:120,TUE:70,WED:100,THU:60,FRI:140,SAT:120,SUN:0},
- logs:[],recommendations:[],archives:[],draft:null,scheduleProposal:null
+ logs:[],recommendations:[],archives:[],draft:null,scheduleProposal:null,streaks:{}
 };
 let data=load(),tab='home',workout=null,weight=0,reps=0,rpe=8,evalState=null;
 
@@ -84,7 +84,7 @@ function syncInputToSegment(w){
 }
 function migrate(x){
  if(!x||typeof x!=='object')x=clone(seed);
- x.version=2;x.available=x.available||clone(seed.available);x.logs=x.logs||[];x.recommendations=x.recommendations||[];x.archives=x.archives||[];x.draft=x.draft||null;x.scheduleProposal=x.scheduleProposal||null;
+ x.version=2;x.available=x.available||clone(seed.available);x.logs=x.logs||[];x.recommendations=x.recommendations||[];x.archives=x.archives||[];x.draft=x.draft||null;x.scheduleProposal=x.scheduleProposal||null;x.streaks=x.streaks||{};
  x.days=(x.days||clone(seed.days)).map(function(d){d.scheduled=d.scheduled||d.d;d.status=d.status||'PLANNED';d.skipReason=d.skipReason||null;d.items=(d.items||[]).map(ensureSegments);return d});
  return x;
 }
@@ -97,6 +97,7 @@ function getNext(){const active=data.days.filter(function(x){return !isResolved(
 function getLog(day,item){return data.logs.find(function(x){return x.day===day.d&&x.name===item.name&&x.type===item.type})}
 function getRec(day,item){return data.recommendations.find(function(x){return x.day===day.d&&x.name===item.name&&x.type===item.type})}
 function sessionPriority(s){if(s.items.some(function(i){return ['SQ_HIGH','BP_HIGH','DL_MAIN'].includes(i.rule)}))return 'A';if(s.items.some(function(i){return ['SQ_MED','BP_MED'].includes(i.rule)}))return 'B';if(s.items.some(function(i){return i.rule==='LOW'}))return 'C';return 'D'}
+function lowStreakKey(it){return it.name+'|'+it.type}
 function resultClass(v){return v==='PROGRESS'?'progress':v==='FAST_TRACK'?'fast':v==='REDUCE'?'reduce':v==='REVIEW'?'review':'hold'}
 function ruleProfile(it){
  if(it.rule==='SQ_HIGH')return {overall:5,lower:5,upper:1,axial:5,elbow:1};
@@ -211,6 +212,7 @@ function evaluate(ctx){
  const majorExternal=ctx.external.some(function(x){return ['J-cup Collision','Strap Failure','Slippery Bar/Bench'].includes(x)});
  const combined=currentCombinedRisk(w.day).level==='RED';
  const blocked=ctx.pain>=3||critical||((majorExternal||combined)&&max>=8.5);
+ const lowKey=it.rule==='LOW'?lowStreakKey(it):null;
  let verdict='HOLD',next=it.weight,nsets=it.sets,nreps=it.reps,msg='동일 계획 유지',segmentRecommendations=[];
  if(segs.length>1&&(it.rule==='BP_HIGH'||it.rule==='DL_MAIN')){
   segmentRecommendations=segs.map(function(s){
@@ -233,8 +235,8 @@ function evaluate(ctx){
   const topRec=segmentRecommendations.find(function(x){return x.id==='top'});
   next=topRec.nextWeight;nsets=topRec.nextSets;nreps=topRec.nextReps;
  }else{
-  if(ctx.pain>=3){verdict='REVIEW';msg='통증 '+ctx.pain+': 자동 progression 보류'}
-  else if(critical){verdict='REVIEW';msg='Critical technique issue: 자동 progression 보류'}
+  if(ctx.pain>=3){verdict='REVIEW';msg='통증 '+ctx.pain+': 자동 progression 보류';if(lowKey)data.streaks[lowKey]=0}
+  else if(critical){verdict='REVIEW';msg='Critical technique issue: 자동 progression 보류';if(lowKey)data.streaks[lowKey]=0}
   else if((majorExternal||combined)&&max>=8.5){verdict='REVIEW';msg=(majorExternal?'외부 변수':'고피로 병합')+'로 고RPE 해석 보류'}
   else if(it.rule==='SQ_HIGH'){
     if(max<=5.5&&last<=5.5){verdict='FAST_TRACK';next=it.weight+5;msg='매우 여유로움: +5kg 8×3 제안'}
@@ -246,11 +248,17 @@ function evaluate(ctx){
     if(max<=7.5){verdict='PROGRESS';if(it.reps<5)nreps=it.reps+1;else{next=it.weight+2.5;nreps=3}msg='Medium 4×3→4→5 progression'}else if(max>=8.5){verdict='HOLD';msg='Medium 난도 과다: 유지'}
   }else if(it.rule==='BP_MED'){
     if(max<=7.5){verdict='PROGRESS';if(it.reps<10)nreps=it.reps+1;else{next=it.weight+2.5;nreps=8}msg='TnG 4×8→9→10 progression'}else if(max>=8){verdict='HOLD';msg='TnG 난도 과다: 유지'}
-  }else if(it.rule==='LOW'){verdict=max<=6?'PROGRESS':'HOLD';msg=max<=6?'Low day 성공 노출 누적':'Low day 유지'}
+  }else if(it.rule==='LOW'){
+    if(max<=6){
+      const streak=(data.streaks[lowKey]||0)+1;
+      if(streak>=2){verdict='PROGRESS';next=it.weight+2.5;msg='Low day 2/2 성공 → +2.5kg';data.streaks[lowKey]=0}
+      else{verdict='HOLD';msg='Low day 성공 '+streak+'/2 · 동일 중량 유지';data.streaks[lowKey]=streak}
+    }else{verdict='HOLD';msg='Low day @7+ · 성공 streak 초기화';data.streaks[lowKey]=0}
+  }
   else if(it.rule==='ARM'){verdict=max<=it.rpeMax&&ctx.pain<=1?'PROGRESS':'HOLD';msg=verdict==='PROGRESS'?'반복수/부하 증가 가능':'관절/RPE 기준으로 유지'}
  }
  data.recommendations=data.recommendations.filter(function(x){return !(x.day===w.day.d&&x.name===it.name&&x.type===it.type)});
- data.recommendations.push({day:w.day.d,name:it.name,type:it.type,verdict:verdict,next:next,nsets:nsets,nreps:nreps,max:max,last:last,msg:msg,pain:ctx.pain,tech:ctx.tech,external:ctx.external,combined:combined,segmentRecommendations:segmentRecommendations});
+ data.recommendations.push({day:w.day.d,name:it.name,type:it.type,verdict:verdict,next:next,nsets:nsets,nreps:nreps,max:max,last:last,msg:msg,pain:ctx.pain,tech:ctx.tech,external:ctx.external,combined:combined,segmentRecommendations:segmentRecommendations,lowStreak:lowKey?(data.streaks[lowKey]||0):null});
  data.logs=data.logs.filter(function(x){return !(x.day===w.day.d&&x.name===it.name&&x.type===it.type)});
  data.logs.push({day:w.day.d,scheduled:w.day.scheduled,name:it.name,type:it.type,sets:w.sets,evaluation:ctx,completedAt:new Date().toISOString()});
  const dayLogs=w.day.items.filter(function(x){return getLog(w.day,x)||(x.name===it.name&&x.type===it.type)}).length;
@@ -351,7 +359,7 @@ function week(){
  (data.scheduleProposal?'<section class="card"><div class="row"><h3>자동 재배치 Draft</h3><button class="smallbtn" id="discardProposal">취소</button></div>'+data.scheduleProposal.map(function(p){return '<div class="proposal"><b>'+esc(p.label)+'</b><div class="muted">'+p.from+' → '+p.to+(p.from===p.to?' · 유지':'')+'</div></div>'}).join('')+'<button class="primary" id="applyProposal">이 일정 적용</button></section>':'')+
  '<section class="card"><h3>현재 배치</h3>'+DAYS.map(dayScheduleHtml).join('')+'</section>'+
  '<section class="card"><div class="row"><div><h3 style="margin:0">W'+data.week+' Review</h3><p class="muted">'+resolvedCount+' / '+data.days.length+' sessions resolved</p></div><span class="tag '+(resolved?'progress':'hold')+'">'+(resolved?'READY':'IN PROGRESS')+'</span></div>'+
- '<div class="reviewgrid">'+data.days.map(function(s){return '<div class="reviewrow"><div><b>'+s.d+' · '+esc(s.label)+'</b><small class="muted">'+s.status+(s.skipReason?' · '+esc(s.skipReason):'')+'</small></div><span>'+s.items.map(function(it){const r=getRec(s,it);return r?'<span class="tag '+resultClass(r.verdict)+'">'+r.verdict+'</span>':''}).join(' ')+'</span></div>'}).join('')+'</div>'+
+ '<div class="reviewgrid">'+data.days.map(function(s){return '<div class="reviewrow"><div><b>'+s.d+' · '+esc(s.label)+'</b><small class="muted">'+s.status+(s.skipReason?' · '+esc(s.skipReason):'')+'</small></div><span>'+s.items.map(function(it){const r=getRec(s,it);return r?'<span class="tag '+resultClass(r.verdict)+'">'+r.verdict+(r.lowStreak!==null&&r.lowStreak!==undefined?' · '+r.lowStreak+'/2':'')+'</span>':''}).join(' ')+'</span></div>'}).join('')+'</div>'+
  (!data.draft?'<button class="primary '+(resolved?'':'disabled')+'" id="makeDraft">W'+(data.week+1)+' Draft 생성</button>':
  '<div class="draftbox"><div class="row"><b>W'+data.draft.week+' DRAFT</b><span class="pill">미확정</span></div>'+data.draft.days.map(function(s){return '<div class="proposal"><b>'+s.d+' · '+esc(s.label)+'</b>'+s.items.map(function(it,idx){return '<div class="session-card"><div class="row"><div><b>'+esc(it.name+' '+it.type)+'</b><div class="muted">'+esc(segmentSummary(it))+'</div>'+(it.override?'<div class="muted">Override · '+esc(it.override.reason)+(it.override.note?' · '+esc(it.override.note):'')+'</div>':'')+'</div><button class="smallbtn" data-draft-edit="'+s.d+'|'+idx+'">'+(it.override?'수정됨':'수정')+'</button></div></div>'}).join('')+'</div>'}).join('')+'<div class="actionrow"><button class="ghost" id="discardDraft">Draft 삭제</button><button class="primary" id="confirmDraft" style="margin-top:0">W'+data.draft.week+' 확정</button></div></div>')+
  '</section>';
