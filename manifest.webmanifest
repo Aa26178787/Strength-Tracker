@@ -1,0 +1,11 @@
+{
+  "name": "Strength Tracker",
+  "short_name": "Strength",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f6f8fb",
+  "theme_color": "#1769ff",
+  "lang": "ko-KR",
+  "description": "개인용 파워리프팅·팔씨름 장기 훈련 관리 앱"
+}
