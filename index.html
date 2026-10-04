@@ -22,7 +22,7 @@
 const STORAGE='strength-tracker-v1';
 const DAYS=['MON','TUE','WED','THU','FRI','SAT','SUN'];
 const seed={
- version:2,week:1,meet:'2026-11-29',
+ version:3,week:1,meet:'2026-11-29',
  days:[
  {d:'MON',scheduled:'MON',label:'SQ High + Arm A',mins:120,status:'PLANNED',items:[
  {name:'Squat',type:'High',weight:115,sets:8,reps:3,rpeMin:7,rpeMax:8,rule:'SQ_HIGH'},
@@ -54,7 +54,7 @@ const seed={
  {name:'Cupping',type:'Arm B',weight:0,sets:2,reps:10,repsMin:10,repsMax:15,rpeMin:6,rpeMax:8,rule:'ARM'}]}
  ],
  available:{MON:120,TUE:70,WED:100,THU:60,FRI:140,SAT:120,SUN:0},
- logs:[],recommendations:[],archives:[],draft:null,scheduleProposal:null,streaks:{},recoveryChecks:[]
+ logs:[],recommendations:[],archives:[],draft:null,scheduleProposal:null,streaks:{},recoveryChecks:[],bodyweightLogs:[]
 };
 let data=clone(seed),tab='home',workout=null,weight=0,reps=0,rpe=8,evalState=null,storageMode='IndexedDB';
 
@@ -92,7 +92,7 @@ function syncInputToSegment(w){
 }
 function migrate(x){
  if(!x||typeof x!=='object')x=clone(seed);
- x.version=2;x.available=x.available||clone(seed.available);x.logs=x.logs||[];x.recommendations=x.recommendations||[];x.archives=x.archives||[];x.draft=x.draft||null;x.scheduleProposal=x.scheduleProposal||null;x.streaks=x.streaks||{};x.recoveryChecks=x.recoveryChecks||[];
+ x.version=3;x.available=x.available||clone(seed.available);x.logs=x.logs||[];x.recommendations=x.recommendations||[];x.archives=x.archives||[];x.draft=x.draft||null;x.scheduleProposal=x.scheduleProposal||null;x.streaks=x.streaks||{};x.recoveryChecks=x.recoveryChecks||[];x.bodyweightLogs=x.bodyweightLogs||[];
  x.days=(x.days||clone(seed.days)).map(function(d){d.scheduled=d.scheduled||d.d;d.status=d.status||'PLANNED';d.skipReason=d.skipReason||null;d.isCarryOver=!!d.isCarryOver;d.carriedFromWeek=d.carriedFromWeek||null;d.items=(d.items||[]).map(ensureSegments);return d});
  return x;
 }
@@ -469,10 +469,51 @@ function week(){
  '<div class="draftbox"><div class="row"><b>W'+data.draft.week+' DRAFT</b><span class="pill">미확정</span></div>'+data.draft.days.map(function(s){return '<div class="proposal"><div class="row"><b>'+s.d+' · '+esc(s.label)+'</b>'+(s.isCarryOver?'<span class="tag review">CARRY OVER</span>':'')+'</div>'+s.items.map(function(it,idx){return '<div class="session-card"><div class="row"><div><b>'+esc(it.name+' '+it.type)+'</b><div class="muted">'+esc(segmentSummary(it))+'</div>'+(it.override?'<div class="muted">Override · '+esc(it.override.reason)+(it.override.note?' · '+esc(it.override.note):'')+'</div>':'')+'</div><button class="smallbtn" data-draft-edit="'+s.d+'|'+idx+'">'+(it.override?'수정됨':'수정')+'</button></div></div>'}).join('')+'</div>'}).join('')+'<div class="actionrow"><button class="ghost" id="discardDraft">Draft 삭제</button><button class="primary" id="confirmDraft" style="margin-top:0">W'+data.draft.week+' 확정</button></div></div>')+
  '</section>';
 }
+function allExerciseLogs(){
+ const out=[];
+ (data.archives||[]).forEach(function(a){(a.logs||[]).forEach(function(l){out.push(Object.assign({week:a.week},l))})});
+ (data.logs||[]).forEach(function(l){out.push(Object.assign({week:data.week},l))});
+ return out
+}
+function setE1RM(s){if(!s||!s.weight||!s.reps||s.reps>12)return 0;return s.weight*(1+s.reps/30)}
+function liftAnalytics(name){
+ const rows=allExerciseLogs().filter(function(l){return l.name===name});
+ return rows.map(function(l){
+  const valid=(l.sets||[]).filter(function(s){return !s.isExtra&&s.weight>0&&s.reps>0});
+  const e=valid.length?Math.max.apply(null,valid.map(setE1RM)):0;
+  const vol=valid.reduce(function(a,s){return a+s.weight*s.reps},0);
+  const avg=valid.length?valid.reduce(function(a,s){return a+(Number(s.rpe)||0)},0)/valid.length:0;
+  return {week:l.week,e1rm:e,volume:vol,avgRpe:avg,date:l.completedAt||'',type:l.type}
+ }).filter(function(x){return x.e1rm>0}).sort(function(a,b){return a.week-b.week||(a.date||'').localeCompare(b.date||'')})
+}
+function sparkline(values){
+ if(!values.length)return '<div class="muted">데이터 없음</div>';
+ const w=300,h=74,p=8,min=Math.min.apply(null,values),max=Math.max.apply(null,values),span=Math.max(1,max-min);
+ const pts=values.map(function(v,i){const x=values.length===1?w/2:p+i*(w-2*p)/(values.length-1),y=h-p-(v-min)*(h-2*p)/span;return x.toFixed(1)+','+y.toFixed(1)}).join(' ');
+ return '<svg viewBox="0 0 '+w+' '+h+'" style="width:100%;height:74px;overflow:visible"><polyline points="'+pts+'" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" opacity=".75"/></svg>'
+}
+function fmt1(x){return Math.round(x*10)/10}
+function analyticsPanel(){
+ const lifts=['Squat','Bench Press','Deadlift'];
+ const cards=lifts.map(function(name){const a=liftAnalytics(name),last=a[a.length-1],best=a.length?Math.max.apply(null,a.map(function(x){return x.e1rm})):0;return '<div class="session-card"><div class="row"><div><b>'+name+'</b><small class="muted">'+(last?'최근 e1RM '+fmt1(last.e1rm)+'kg':'기록 없음')+'</small></div><span class="pill">'+(best?'BEST '+fmt1(best):'—')+'</span></div>'+sparkline(a.map(function(x){return x.e1rm}))+'</div>'}).join('');
+ const cur=allExerciseLogs().filter(function(l){return l.week===data.week&&['Squat','Bench Press','Deadlift'].includes(l.name)});
+ const sets=cur.reduce(function(acc,l){return acc.concat(l.sets||[])},[]).filter(function(s){return s.weight>0&&s.reps>0});
+ const vol=sets.reduce(function(a,s){return a+s.weight*s.reps},0),avg=sets.length?sets.reduce(function(a,s){return a+(Number(s.rpe)||0)},0)/sets.length:0;
+ return '<section class="card"><div class="row"><div><h3 style="margin:0">SBD Analytics</h3><p class="muted">e1RM은 Epley 추정치로 참고용입니다.</p></div><span class="pill">W'+data.week+'</span></div>'+cards+'<div class="row" style="margin-top:10px"><div><b>이번 주 SBD Volume</b><div>'+Math.round(vol).toLocaleString()+' kg·reps</div></div><div style="text-align:right"><b>평균 RPE</b><div>'+(avg?fmt1(avg):'—')+'</div></div></div></section>'
+}
+function bodyweightPanel(){
+ const arr=(data.bodyweightLogs||[]).slice().sort(function(a,b){return a.date.localeCompare(b.date)});
+ const recent=arr.slice(-5).reverse();
+ const today=new Date().toISOString().slice(0,10);
+ return '<section class="card"><div class="row"><div><h3 style="margin:0">Bodyweight</h3><p class="muted">67kg급 추이</p></div><span class="pill">'+(arr.length?arr[arr.length-1].weight+'kg':'미입력')+'</span></div>'+
+ sparkline(arr.map(function(x){return x.weight}))+
+ '<div class="timegrid" style="grid-template-columns:1.4fr 1fr;margin-top:10px"><label>날짜<input id="bwDate" type="date" value="'+today+'"></label><label>체중 kg<input id="bwWeight" type="number" min="40" max="150" step=".1" placeholder="66.0"></label></div><button class="primary" id="saveBw">체중 저장</button>'+
+ (recent.length?recent.map(function(x){return '<div class="history-item"><div><b>'+x.weight+' kg</b><small class="muted">'+x.date+'</small></div><button class="smallbtn" data-bw-del="'+x.id+'">삭제</button></div>'}).join(''):'<p class="muted">체중 기록이 없습니다.</p>')+'</section>'
+}
 function history(){
  const current=data.logs.length?'<section class="card"><h3>현재 W'+data.week+'</h3>'+data.logs.slice().reverse().map(function(l){const r=data.recommendations.find(function(x){return x.day===l.day&&x.name===l.name&&x.type===l.type});return '<div class="history-item"><div><b>'+l.day+' · '+esc(l.name)+' '+esc(l.type)+'</b><small class="muted">'+l.sets.length+'세트 · '+(l.evaluation?'통증 '+l.evaluation.pain:'')+'</small></div>'+(r?'<span class="tag '+resultClass(r.verdict)+'">'+r.verdict+'</span>':'')+'</div>'}).join('')+'</section>':'';
  const archived=data.archives.slice().reverse().map(function(a){return '<section class="card"><div class="row"><h3 style="margin:0">W'+a.week+'</h3><span class="tag progress">ARCHIVED</span></div><p class="muted">'+a.logs.length+' exercise logs · '+new Date(a.completedAt).toLocaleDateString('ko-KR')+'</p></section>'}).join('');
- document.getElementById('app').innerHTML='<div class="top"><div><h1>기록</h1><p class="sub">현재 주차 + 보존된 과거 주차</p></div></div>'+current+(archived||(!current?'<section class="card"><p class="muted">아직 기록이 없습니다.</p></section>':''));
+ document.getElementById('app').innerHTML='<div class="top"><div><h1>기록</h1><p class="sub">e1RM · Volume · RPE · 체중</p></div></div>'+analyticsPanel()+bodyweightPanel()+current+(archived||(!current?'<section class="card"><p class="muted">아직 훈련 기록이 없습니다.</p></section>':''));
 }
 function settings(){
  document.getElementById('app').innerHTML='<div class="top"><div><h1>설정</h1><p class="sub">서버 없는 IndexedDB 로컬 저장</p></div></div><section class="card"><h3>데이터 관리</h3><p class="muted">기록은 이 폰 브라우저의 IndexedDB에 저장됩니다. 폰 교체/브라우저 데이터 삭제 전에 JSON 백업을 권장합니다.</p><button class="primary" id="backup">JSON 백업</button><label class="secondary" style="display:grid;place-items:center;margin-top:10px;height:49px;border-radius:13px;font-weight:800">백업 복원<input id="restore" type="file" accept="application/json" style="display:none"></label><button class="danger" id="reset">전체 초기화</button></section>'+
@@ -500,6 +541,8 @@ function bind(){
  if(document.getElementById('makeDraft'))document.getElementById('makeDraft').onclick=generateDraft;
  if(document.getElementById('discardDraft'))document.getElementById('discardDraft').onclick=function(){data.draft=null;save();render()};
  if(document.getElementById('confirmDraft'))document.getElementById('confirmDraft').onclick=confirmDraft;
+ if(document.getElementById('saveBw'))document.getElementById('saveBw').onclick=function(){const date=document.getElementById('bwDate').value,weight=Number(document.getElementById('bwWeight').value);if(!date||!weight)return alert('날짜와 체중을 입력해 주세요.');data.bodyweightLogs=data.bodyweightLogs.filter(function(x){return x.date!==date});data.bodyweightLogs.push({id:'bw-'+date,date:date,weight:weight});save();render()};
+ document.querySelectorAll('[data-bw-del]').forEach(function(b){b.onclick=function(){data.bodyweightLogs=data.bodyweightLogs.filter(function(x){return x.id!==b.dataset.bwDel});save();render()}});
  if(document.getElementById('backup'))document.getElementById('backup').onclick=function(){const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='strength-tracker-'+new Date().toISOString().slice(0,10)+'.json';a.click();URL.revokeObjectURL(a.href)};
  if(document.getElementById('restore'))document.getElementById('restore').onchange=async function(){const file=this.files&&this.files[0];if(!file)return;try{data=migrate(JSON.parse(await file.text()));save();render()}catch(e){alert('백업 파일을 읽을 수 없습니다.')}};
  if(document.getElementById('reset'))document.getElementById('reset').onclick=function(){if(confirm('모든 로컬 기록을 초기화할까요?')){data=migrate(clone(seed));save();render()}};
