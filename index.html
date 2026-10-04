@@ -56,7 +56,7 @@ const seed={
  available:{MON:120,TUE:70,WED:100,THU:60,FRI:140,SAT:120,SUN:0},
  logs:[],recommendations:[],archives:[],draft:null,scheduleProposal:null,streaks:{},recoveryChecks:[]
 };
-let data=load(),tab='home',workout=null,weight=0,reps=0,rpe=8,evalState=null;
+let data=clone(seed),tab='home',workout=null,weight=0,reps=0,rpe=8,evalState=null,storageMode='IndexedDB';
 
 function clone(x){return JSON.parse(JSON.stringify(x))}
 function defaultSegments(it){
@@ -96,8 +96,59 @@ function migrate(x){
  x.days=(x.days||clone(seed.days)).map(function(d){d.scheduled=d.scheduled||d.d;d.status=d.status||'PLANNED';d.skipReason=d.skipReason||null;d.isCarryOver=!!d.isCarryOver;d.carriedFromWeek=d.carriedFromWeek||null;d.items=(d.items||[]).map(ensureSegments);return d});
  return x;
 }
-function load(){try{return migrate(JSON.parse(localStorage.getItem(STORAGE))||clone(seed))}catch(e){return migrate(clone(seed))}}
-function save(){localStorage.setItem(STORAGE,JSON.stringify(data))}
+const DB_NAME='strength-tracker-db',DB_VERSION=1,STORE='kv';
+function openDB(){
+ return new Promise(function(resolve,reject){
+  if(!('indexedDB' in window))return reject(new Error('IndexedDB unavailable'));
+  const req=indexedDB.open(DB_NAME,DB_VERSION);
+  req.onupgradeneeded=function(){const db=req.result;if(!db.objectStoreNames.contains(STORE))db.createObjectStore(STORE)};
+  req.onsuccess=function(){resolve(req.result)};
+  req.onerror=function(){reject(req.error||new Error('IndexedDB open failed'))}
+ })
+}
+async function idbGet(key){
+ const db=await openDB();
+ return new Promise(function(resolve,reject){
+  const tx=db.transaction(STORE,'readonly'),req=tx.objectStore(STORE).get(key);
+  req.onsuccess=function(){resolve(req.result)};
+  req.onerror=function(){reject(req.error)};
+  tx.oncomplete=function(){db.close()}
+ })
+}
+async function idbPut(key,value){
+ const db=await openDB();
+ return new Promise(function(resolve,reject){
+  const tx=db.transaction(STORE,'readwrite');
+  tx.objectStore(STORE).put(clone(value),key);
+  tx.oncomplete=function(){db.close();resolve()};
+  tx.onerror=function(){db.close();reject(tx.error)}
+ })
+}
+async function loadData(){
+ try{
+  const saved=await idbGet('appState');
+  if(saved){storageMode='IndexedDB';return migrate(saved)}
+  let legacy=null;
+  try{legacy=JSON.parse(localStorage.getItem(STORAGE)||'null')}catch(e){}
+  const initial=migrate(legacy||clone(seed));
+  await idbPut('appState',initial);
+  storageMode=legacy?'IndexedDB · migrated':'IndexedDB';
+  return initial
+ }catch(e){
+  storageMode='localStorage fallback';
+  try{return migrate(JSON.parse(localStorage.getItem(STORAGE))||clone(seed))}catch(err){return migrate(clone(seed))}
+ }
+}
+function save(){
+ if(storageMode.indexOf('IndexedDB')===0){
+  idbPut('appState',data).catch(function(){
+   storageMode='localStorage fallback';
+   localStorage.setItem(STORAGE,JSON.stringify(data))
+  })
+ }else{
+  localStorage.setItem(STORAGE,JSON.stringify(data))
+ }
+}
 function esc(s){return String(s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
 function dday(){const a=new Date();a.setHours(0,0,0,0);const b=new Date(data.meet+'T00:00:00');return Math.max(0,Math.ceil((b-a)/86400000))}
 function isResolved(s){return ['COMPLETED','SKIPPED','CARRIED'].includes(s.status)}
@@ -424,8 +475,8 @@ function history(){
  document.getElementById('app').innerHTML='<div class="top"><div><h1>기록</h1><p class="sub">현재 주차 + 보존된 과거 주차</p></div></div>'+current+(archived||(!current?'<section class="card"><p class="muted">아직 기록이 없습니다.</p></section>':''));
 }
 function settings(){
- document.getElementById('app').innerHTML='<div class="top"><div><h1>설정</h1><p class="sub">서버 없는 로컬 저장</p></div></div><section class="card"><h3>데이터 관리</h3><p class="muted">기록은 이 폰 브라우저에 저장됩니다. 폰 교체/브라우저 데이터 삭제 전에 JSON 백업을 권장합니다.</p><button class="primary" id="backup">JSON 백업</button><label class="secondary" style="display:grid;place-items:center;margin-top:10px;height:49px;border-radius:13px;font-weight:800">백업 복원<input id="restore" type="file" accept="application/json" style="display:none"></label><button class="danger" id="reset">전체 초기화</button></section>'+
- '<section class="card"><h3>현재 데이터</h3><p class="muted">Schema v'+data.version+' · W'+data.week+' · 보관 주차 '+data.archives.length+'개</p></section>';
+ document.getElementById('app').innerHTML='<div class="top"><div><h1>설정</h1><p class="sub">서버 없는 IndexedDB 로컬 저장</p></div></div><section class="card"><h3>데이터 관리</h3><p class="muted">기록은 이 폰 브라우저의 IndexedDB에 저장됩니다. 폰 교체/브라우저 데이터 삭제 전에 JSON 백업을 권장합니다.</p><button class="primary" id="backup">JSON 백업</button><label class="secondary" style="display:grid;place-items:center;margin-top:10px;height:49px;border-radius:13px;font-weight:800">백업 복원<input id="restore" type="file" accept="application/json" style="display:none"></label><button class="danger" id="reset">전체 초기화</button></section>'+
+ '<section class="card"><h3>현재 데이터</h3><p class="muted">Storage: '+esc(storageMode)+' · Schema v'+data.version+' · W'+data.week+' · 보관 주차 '+data.archives.length+'개</p></section>';
 }
 function bind(){
  document.querySelectorAll('[data-tab]').forEach(function(b){b.onclick=function(){tab=b.dataset.tab;workout=null;render()}});
@@ -453,7 +504,7 @@ function bind(){
  if(document.getElementById('restore'))document.getElementById('restore').onchange=async function(){const file=this.files&&this.files[0];if(!file)return;try{data=migrate(JSON.parse(await file.text()));save();render()}catch(e){alert('백업 파일을 읽을 수 없습니다.')}};
  if(document.getElementById('reset'))document.getElementById('reset').onclick=function(){if(confirm('모든 로컬 기록을 초기화할까요?')){data=migrate(clone(seed));save();render()}};
 }
-render();
+loadData().then(function(d){data=d;render()}).catch(function(){data=migrate(clone(seed));render()});
 if('serviceWorker' in navigator)window.addEventListener('load',function(){navigator.serviceWorker.register('./sw.js').catch(function(){})});
 })();
 </script>
