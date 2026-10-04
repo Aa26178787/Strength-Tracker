@@ -44,7 +44,7 @@ function dday(){const a=new Date();a.setHours(0,0,0,0);const b=new Date(data.mee
 function getNext(){return data.days.find(x=>x.status!=='COMPLETED')||data.days[0]}
 function getLog(day,item){return data.logs.find(x=>x.day===day.d&&x.name===item.name&&x.type===item.type)}
 function nav(){document.getElementById('nav').innerHTML=['home:⌂ 홈','week:▦ 주간','history:▥ 기록','settings:⚙ 설정'].map(function(x){const p=x.split(':');return '<button data-tab="'+p[0]+'" class="'+(tab===p[0]?'active':'')+'">'+p[1]+'</button>'}).join('')}
-function render(){nav();if(workout){renderWorkout();return} if(tab==='home')home(); else if(tab==='week')week(); else if(tab==='history')history(); else settings(); bind()}
+function render(){nav();if(workout){renderWorkout();bind();return} if(tab==='home')home(); else if(tab==='week')week(); else if(tab==='history')history(); else settings(); bind()}
 function itemRow(day,it,idx){const log=getLog(day,it);return '<button class="exercise" data-open="'+day.d+'|'+idx+'"><span><b>'+esc(it.name)+' '+esc(it.type)+'</b><small>'+((it.weight||'—'))+'kg · '+it.sets+'×'+it.reps+' · @'+it.rpeMin+'~'+it.rpeMax+'</small></span><span>'+(log?'✓':'›')+'</span></button>'}
 function home(){
  const n=getNext(), done=data.days.filter(x=>x.status==='COMPLETED').length;
