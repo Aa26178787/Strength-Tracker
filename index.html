@@ -98,7 +98,7 @@ function getLog(day,item){return data.logs.find(function(x){return x.day===day.d
 function getRec(day,item){return data.recommendations.find(function(x){return x.day===day.d&&x.name===item.name&&x.type===item.type})}
 function sessionPriority(s){if(s.items.some(function(i){return ['SQ_HIGH','BP_HIGH','DL_MAIN'].includes(i.rule)}))return 'A';if(s.items.some(function(i){return ['SQ_MED','BP_MED'].includes(i.rule)}))return 'B';if(s.items.some(function(i){return i.rule==='LOW'}))return 'C';return 'D'}
 function lowStreakKey(it){return it.name+'|'+it.type}
-function resultClass(v){return v==='PROGRESS'?'progress':v==='FAST_TRACK'?'fast':v==='REDUCE'?'reduce':v==='REVIEW'?'review':'hold'}
+function resultClass(v){return v==='PROGRESS'?'progress':v==='FAST_TRACK'?'fast':v==='REDUCE'?'reduce':v==='REVIEW'?'review':v==='INCOMPLETE'?'hold':'hold'}
 function ruleProfile(it){
  if(it.rule==='SQ_HIGH')return {overall:5,lower:5,upper:1,axial:5,elbow:1};
  if(it.rule==='DL_MAIN')return {overall:5,lower:5,upper:1,axial:5,elbow:1};
@@ -156,32 +156,48 @@ function home(){
  '<div class="daygrid">'+data.days.slice(0,5).map(function(x){const cls=x.status==='COMPLETED'?'day done':x===n?'day today':'day';return '<div class="'+cls+'"><b>'+x.d+'</b><span class="dot">'+(x.status==='COMPLETED'?'✓':x.status==='SKIPPED'?'–':x.status==='CARRIED'?'↗':x===n?'●':'○')+'</span><small>'+esc(x.status)+'</small></div>'}).join('')+'</div><p class="muted">'+done+' / '+data.days.length+' sessions resolved</p></section>';
 }
 
+function inputSegment(w){return activeSegment(w)||(w.extraSegmentId?defaultSegments(w.it).find(function(s){return s.id===w.extraSegmentId}):null)}
+function plannedSetCount(it){return defaultSegments(it).reduce(function(a,s){return a+s.sets},0)}
+function openSetEditor(index){
+ const s=workout&&workout.sets[index];if(!s)return;
+ const html='<div class="modal-center" id="setModal"><div class="modal-card"><div class="row"><h2 style="margin:0">세트 수정</h2><button class="smallbtn" id="setClose">닫기</button></div>'+
+ '<div class="timegrid" style="grid-template-columns:repeat(3,1fr);margin-top:14px"><label>kg<input id="editWeight" type="number" step="2.5" value="'+s.weight+'"></label><label>반복<input id="editReps" type="number" min="1" value="'+s.reps+'"></label><label>RPE<input id="editRpe" type="number" min="6" max="10" step=".5" value="'+s.rpe+'"></label></div>'+
+ '<div class="actionrow"><button class="danger" id="deleteSet" style="margin-top:12px">세트 삭제</button><button class="primary" id="saveSet">수정 저장</button></div></div></div>';
+ document.body.insertAdjacentHTML('beforeend',html);
+ document.getElementById('setClose').onclick=function(){document.getElementById('setModal').remove()};
+ document.getElementById('deleteSet').onclick=function(){if(confirm('이 세트를 삭제할까요?')){workout.sets.splice(index,1);workout.extraSegmentId=null;syncInputToSegment(workout);document.getElementById('setModal').remove();render()}};
+ document.getElementById('saveSet').onclick=function(){s.weight=Number(document.getElementById('editWeight').value)||0;s.reps=Math.max(1,Number(document.getElementById('editReps').value)||1);s.rpe=Math.min(10,Math.max(6,Number(document.getElementById('editRpe').value)||8));document.getElementById('setModal').remove();render()};
+}
 function openWorkout(code){
  const parts=code.split('|'),day=data.days.find(function(x){return x.d===parts[0]}),idx=Number(parts[1]),it=ensureSegments(day.items[idx]),log=getLog(day,it);
  if(day.status==='SKIPPED'||day.status==='CARRIED')return alert('이 세션은 '+day.status+' 상태입니다. 주간 화면에서 상태를 되돌린 뒤 진행하세요.');
- workout={day:day,idx:idx,it:it,sets:log?log.sets.slice():[]};
+ workout={day:day,idx:idx,it:it,sets:log?log.sets.slice():[],extraSegmentId:null,earlyFinish:false};
  // Legacy logs without segmentId belong to the top/main segment.
  const first=defaultSegments(it)[0].id;
  workout.sets=workout.sets.map(function(s){return Object.assign({segmentId:first},s)});
  syncInputToSegment(workout);evalState=null;render();
 }
 function renderWorkout(){
- const w=workout,it=w.it,segs=defaultSegments(it),seg=activeSegment(w),done=!seg,risk=currentCombinedRisk(w.day);
+ const w=workout,it=w.it,segs=defaultSegments(it),planned=activeSegment(w),seg=inputSegment(w),plannedDone=!planned,risk=currentCombinedRisk(w.day);
  const progress=segs.map(function(s){
-  const n=segmentSets(w,s.id).length;
+  const n=segmentSets(w,s.id).filter(function(x){return !x.isExtra}).length;
   return '<div class="proposal"><div class="row"><b>'+esc(s.label)+'</b><span class="pill">'+n+' / '+s.sets+'</span></div><div class="muted">'+(s.weight||'—')+'kg · '+s.sets+'×'+(s.repsMin!==s.repsMax?s.repsMin+'~'+s.repsMax:s.reps)+' · @'+s.rpeMin+'~'+s.rpeMax+'</div></div>'
  }).join('');
+ const canInput=!!seg;
  document.getElementById('app').innerHTML='<div class="row"><button class="smallbtn" id="back">‹ 돌아가기</button><b>세트 입력</b><span></span></div>'+
- '<section class="card"><div class="row"><div><h2 style="margin:0">'+esc(it.name)+' '+esc(it.type)+'</h2><p class="muted">'+w.day.scheduled+' · Top/Backoff 독립 기록</p></div><span class="risk '+risk.level.toLowerCase()+'">'+risk.level+'</span></div>'+progress+
+ '<section class="card"><div class="row"><div><h2 style="margin:0">'+esc(it.name)+' '+esc(it.type)+'</h2><p class="muted">'+w.day.scheduled+' · 계획 '+plannedSetCount(it)+'세트 / 실제 '+w.sets.length+'세트</p></div><span class="risk '+risk.level.toLowerCase()+'">'+risk.level+'</span></div>'+progress+
  (risk.level==='RED'?'<div class="banner danger">고피로/시간 충돌 상황입니다. 이 세션의 RPE는 progression 판정에서 보수적으로 해석됩니다.</div>':'')+
- (done?'<div class="banner info">계획된 모든 세트를 완료했습니다.</div>':
- '<div class="banner info"><b>'+esc(seg.label)+'</b> 입력 중 · '+(segmentSets(w,seg.id).length+1)+' / '+seg.sets+' 세트</div>'+
+ (plannedDone&&!w.extraSegmentId?'<div class="banner info">계획된 세트를 모두 완료했습니다. 추가 세트를 기록하거나 평가로 넘어갈 수 있습니다.</div>':'')+
+ (canInput?
+ '<div class="banner info"><b>'+esc(seg.label)+(w.extraSegmentId?' · 추가 세트':'')+'</b> 입력 중</div>'+
  '<span class="label">중량 (kg)</span><div class="stepper"><button data-w="-2.5">-2.5</button><strong id="wval">'+weight+'</strong><button data-w="2.5">+2.5</button></div>'+
  '<span class="label">반복</span><div class="stepper"><button data-r="-1">−</button><strong id="rval">'+reps+'</strong><button data-r="1">+</button></div>'+
  '<span class="label">RPE</span><div class="rpe">'+[6,6.5,7,7.5,8,8.5,9,9.5,10].map(function(x){return '<button data-rpe="'+x+'" class="'+(x===rpe?'sel':'')+'">'+x+'</button>'}).join('')+'</div>'+
- '<button class="primary" id="setdone">✓ '+esc(seg.label)+' 세트 완료</button>')+
- (done?'<button class="primary" id="finish">운동 평가 및 완료</button>':'')+'</section>'+
- '<section class="card"><h3>세트 기록</h3>'+(w.sets.length?w.sets.map(function(s,i){const sg=segs.find(function(x){return x.id===(s.segmentId||segs[0].id)});return '<div class="setrow"><b>'+esc(sg?sg.label:'Set')+' '+(segmentSets(w,s.segmentId||segs[0].id).indexOf(s)+1)+'</b><span>'+s.weight+'×'+s.reps+' @'+s.rpe+'</span></div>'}).join(''):'<p class="muted">아직 기록이 없습니다.</p>')+'</section>';
+ '<button class="primary" id="setdone">✓ '+esc(seg.label)+' 세트 완료</button>':'')+
+ (plannedDone&&!w.extraSegmentId?'<div class="actionrow"><button class="ghost" id="addExtra">+ 추가 세트</button><button class="primary" id="finish" style="margin-top:0">운동 평가 및 완료</button></div>':'')+
+ (!plannedDone?'<button class="secondary" id="earlyFinish">여기서 조기 종료</button>':'')+
+ '</section>'+
+ '<section class="card"><div class="row"><h3>세트 기록</h3><small class="muted">누르면 수정</small></div>'+(w.sets.length?w.sets.map(function(s,i){const sg=segs.find(function(x){return x.id===(s.segmentId||segs[0].id)});return '<button class="exercise" data-edit-set="'+i+'"><span><b>'+esc(sg?sg.label:'Set')+(s.isExtra?' · EXTRA':'')+'</b><small>'+s.weight+'×'+s.reps+' @'+s.rpe+'</small></span><span>수정 ›</span></button>'}).join(''):'<p class="muted">아직 기록이 없습니다.</p>')+'</section>';
 }
 function techniqueOptions(it){
  if(it.name==='Squat')return ['Grip Open','Bar Roll','Hip Shoot','Knee Valgus','Forefoot Shift','Brace Loss'];
@@ -190,12 +206,13 @@ function techniqueOptions(it){
  return ['Technique Off','Joint Discomfort'];
 }
 function renderEvaluation(){
- evalState={pain:0,tech:[],external:[],note:''};
+ evalState={pain:0,tech:[],external:[],note:'',incompleteReason:workout.earlyFinish?'Time/Schedule':null};
  const it=workout.it;
  document.getElementById('app').innerHTML='<div class="row"><button class="smallbtn" id="evalBack">‹ 세트로</button><b>운동 종료 평가</b><span></span></div>'+
  '<section class="card"><h2>'+esc(it.name)+' '+esc(it.type)+'</h2><span class="label">기술 문제</span><div class="choice-grid">'+techniqueOptions(it).map(function(x){return '<button class="choice" data-tech="'+esc(x)+'">'+esc(x)+'</button>'}).join('')+'</div>'+
  '<span class="label">통증</span><div class="rpe">'+[0,1,2,3,4,5].map(function(x){return '<button data-pain="'+x+'" class="'+(x===0?'sel':'')+'">'+(x===5?'5+':x)+'</button>'}).join('')+'</div>'+
  '<span class="label">외부 변수</span><div class="choice-grid">'+['J-cup Collision','Strap Failure','Slippery Bar/Bench','Poor Sleep','Fasted','Work Fatigue','Different Bar/Bench'].map(function(x){return '<button class="choice" data-ext="'+esc(x)+'">'+esc(x)+'</button>'}).join('')+'</div>'+
+ (workout.earlyFinish?'<span class="label">조기 종료 이유</span><select id="incompleteReason" class="textarea" style="min-height:44px"><option>Time/Schedule</option><option>Strength Failure</option><option>Technique</option><option>Pain</option><option>Equipment</option><option>Plan Change</option></select>':'')+
  '<span class="label">메모</span><textarea id="evalNote" class="textarea" placeholder="선택 사항"></textarea><button class="primary" id="evalSubmit">판정하기</button></section>';
  bindEvaluation();
 }
@@ -204,7 +221,7 @@ function bindEvaluation(){
  document.querySelectorAll('[data-tech]').forEach(function(b){b.onclick=function(){const x=b.dataset.tech,ix=evalState.tech.indexOf(x);if(ix>=0)evalState.tech.splice(ix,1);else evalState.tech.push(x);b.classList.toggle('sel')}});
  document.querySelectorAll('[data-ext]').forEach(function(b){b.onclick=function(){const x=b.dataset.ext,ix=evalState.external.indexOf(x);if(ix>=0)evalState.external.splice(ix,1);else evalState.external.push(x);b.classList.toggle('sel')}});
  document.querySelectorAll('[data-pain]').forEach(function(b){b.onclick=function(){evalState.pain=Number(b.dataset.pain);document.querySelectorAll('[data-pain]').forEach(function(x){x.classList.toggle('sel',Number(x.dataset.pain)===evalState.pain)})}});
- document.getElementById('evalSubmit').onclick=function(){evalState.note=document.getElementById('evalNote').value||'';evaluate(evalState)};
+ document.getElementById('evalSubmit').onclick=function(){evalState.note=document.getElementById('evalNote').value||'';const ir=document.getElementById('incompleteReason');if(ir)evalState.incompleteReason=ir.value;evaluate(evalState)};
 }
 function evaluate(ctx){
  const w=workout,it=w.it,segs=defaultSegments(it),all=w.sets,allR=all.map(function(x){return x.rpe}),max=Math.max.apply(null,allR),last=allR[allR.length-1];
@@ -238,6 +255,7 @@ function evaluate(ctx){
   if(ctx.pain>=3){verdict='REVIEW';msg='통증 '+ctx.pain+': 자동 progression 보류';if(lowKey)data.streaks[lowKey]=0}
   else if(critical){verdict='REVIEW';msg='Critical technique issue: 자동 progression 보류';if(lowKey)data.streaks[lowKey]=0}
   else if((majorExternal||combined)&&max>=8.5){verdict='REVIEW';msg=(majorExternal?'외부 변수':'고피로 병합')+'로 고RPE 해석 보류'}
+  else if(workout.earlyFinish){verdict='INCOMPLETE';msg='계획 미완료 · '+(ctx.incompleteReason||'Reason not set');if(lowKey&&['Strength Failure','Technique','Pain'].includes(ctx.incompleteReason))data.streaks[lowKey]=0}
   else if(it.rule==='SQ_HIGH'){
     if(max<=5.5&&last<=5.5){verdict='FAST_TRACK';next=it.weight+5;msg='매우 여유로움: +5kg 8×3 제안'}
     else if(max<=6.5&&last<=6.5){verdict='FAST_TRACK';next=it.weight+2.5;msg='여유로움: +2.5kg 8×3 제안'}
@@ -260,7 +278,7 @@ function evaluate(ctx){
  data.recommendations=data.recommendations.filter(function(x){return !(x.day===w.day.d&&x.name===it.name&&x.type===it.type)});
  data.recommendations.push({day:w.day.d,name:it.name,type:it.type,verdict:verdict,next:next,nsets:nsets,nreps:nreps,max:max,last:last,msg:msg,pain:ctx.pain,tech:ctx.tech,external:ctx.external,combined:combined,segmentRecommendations:segmentRecommendations,lowStreak:lowKey?(data.streaks[lowKey]||0):null});
  data.logs=data.logs.filter(function(x){return !(x.day===w.day.d&&x.name===it.name&&x.type===it.type)});
- data.logs.push({day:w.day.d,scheduled:w.day.scheduled,name:it.name,type:it.type,sets:w.sets,evaluation:ctx,completedAt:new Date().toISOString()});
+ data.logs.push({day:w.day.d,scheduled:w.day.scheduled,name:it.name,type:it.type,sets:w.sets,evaluation:ctx,incomplete:workout.earlyFinish,completedAt:new Date().toISOString()});
  const dayLogs=w.day.items.filter(function(x){return getLog(w.day,x)||(x.name===it.name&&x.type===it.type)}).length;
  if(dayLogs>=w.day.items.length)w.day.status='COMPLETED';
  save();
@@ -379,12 +397,15 @@ function bind(){
  document.querySelectorAll('[data-tab]').forEach(function(b){b.onclick=function(){tab=b.dataset.tab;workout=null;render()}});
  document.querySelectorAll('[data-open]').forEach(function(b){b.onclick=function(){openWorkout(b.dataset.open)}});
  document.querySelectorAll('[data-sched]').forEach(function(b){b.onclick=function(){openScheduleEditor(b.dataset.sched)}});
+ document.querySelectorAll('[data-edit-set]').forEach(function(b){b.onclick=function(){openSetEditor(Number(b.dataset.editSet))}});
  document.querySelectorAll('[data-draft-edit]').forEach(function(b){b.onclick=function(){const p=b.dataset.draftEdit.split('|');openDraftEditor(p[0],Number(p[1]))}});
  if(document.getElementById('back'))document.getElementById('back').onclick=function(){workout=null;render()};
  document.querySelectorAll('[data-w]').forEach(function(b){b.onclick=function(){weight=Math.max(0,weight+Number(b.dataset.w));document.getElementById('wval').textContent=weight}});
  document.querySelectorAll('[data-r]').forEach(function(b){b.onclick=function(){reps=Math.max(1,reps+Number(b.dataset.r));document.getElementById('rval').textContent=reps}});
  document.querySelectorAll('[data-rpe]').forEach(function(b){b.onclick=function(){rpe=Number(b.dataset.rpe);document.querySelectorAll('[data-rpe]').forEach(function(x){x.classList.toggle('sel',Number(x.dataset.rpe)===rpe)})}});
- if(document.getElementById('setdone'))document.getElementById('setdone').onclick=function(){const seg=activeSegment(workout);if(!seg)return;workout.sets.push({segmentId:seg.id,weight:weight,reps:reps,rpe:rpe});syncInputToSegment(workout);render()};
+ if(document.getElementById('setdone'))document.getElementById('setdone').onclick=function(){const seg=inputSegment(workout);if(!seg)return;workout.sets.push({segmentId:seg.id,weight:weight,reps:reps,rpe:rpe,isExtra:!!workout.extraSegmentId});workout.extraSegmentId=null;syncInputToSegment(workout);render()};
+ if(document.getElementById('addExtra'))document.getElementById('addExtra').onclick=function(){const segs=defaultSegments(workout.it),last=segs[segs.length-1],lastSet=workout.sets.filter(function(x){return (x.segmentId||last.id)===last.id}).slice(-1)[0];workout.extraSegmentId=last.id;weight=lastSet?lastSet.weight:last.weight;reps=lastSet?lastSet.reps:last.reps;rpe=lastSet?lastSet.rpe:8;render()};
+ if(document.getElementById('earlyFinish'))document.getElementById('earlyFinish').onclick=function(){if(!workout.sets.length)return alert('최소 한 세트를 기록한 뒤 조기 종료할 수 있습니다.');workout.earlyFinish=true;renderEvaluation()};
  if(document.getElementById('finish'))document.getElementById('finish').onclick=renderEvaluation;
  if(document.getElementById('savetime'))document.getElementById('savetime').onclick=function(){document.querySelectorAll('[data-time]').forEach(function(x){data.available[x.dataset.time]=Number(x.value)||0});save();render()};
  if(document.getElementById('autoPlan'))document.getElementById('autoPlan').onclick=autoReplan;
