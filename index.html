@@ -22,7 +22,15 @@
 const STORAGE='strength-tracker-v1';
 const DAYS=['MON','TUE','WED','THU','FRI','SAT','SUN'];
 const seed={
- version:3,week:1,meet:'2026-11-29',
+ version:4,week:1,meet:'2026-11-29',
+ program:{id:'program-001',name:'Long-term Strength 01',startDate:'2026-10-05',competitionDate:'2026-11-29',weightClass:67,increment:2.5,status:'ACTIVE',currentBlockId:'accumulation',weekMode:'TRAINING_COMPLETION'},
+ blocks:[
+  {id:'accumulation',name:'Accumulation',status:'ACTIVE'},
+  {id:'strength',name:'Strength',status:'PLANNED'},
+  {id:'competition',name:'Competition Specific',status:'PLANNED'},
+  {id:'taper',name:'Mini Taper',status:'PLANNED'}
+ ],
+ weekState:'ACTIVE',defaultAvailability:{MON:120,TUE:70,WED:100,THU:60,FRI:140,SAT:120,SUN:0},lastBackupAt:null,inProgress:null,issueHistory:[],programHistory:[],
  days:[
  {d:'MON',scheduled:'MON',label:'SQ High + Arm A',mins:120,status:'PLANNED',items:[
  {name:'Squat',type:'High',weight:115,sets:8,reps:3,rpeMin:7,rpeMax:8,rule:'SQ_HIGH'},
@@ -54,7 +62,7 @@ const seed={
  {name:'Cupping',type:'Arm B',weight:0,sets:2,reps:10,repsMin:10,repsMax:15,rpeMin:6,rpeMax:8,rule:'ARM'}]}
  ],
  available:{MON:120,TUE:70,WED:100,THU:60,FRI:140,SAT:120,SUN:0},
- logs:[],recommendations:[],archives:[],draft:null,scheduleProposal:null,streaks:{},recoveryChecks:[],bodyweightLogs:[]
+ logs:[],recommendations:[],archives:[],draft:null,scheduleProposal:null,streaks:{},recoveryChecks:[],bodyweightLogs:[],dateAvailability:{},scheduleChanges:[]
 };
 let data=clone(seed),tab='home',workout=null,weight=0,reps=0,rpe=8,evalState=null,storageMode='IndexedDB';
 
@@ -90,18 +98,57 @@ function syncInputToSegment(w){
  reps=arr.length?arr[arr.length-1].reps:s.reps;
  rpe=8;
 }
+function defaultExerciseMinutes(it){
+ if(it.rule==='SQ_HIGH')return 60;if(it.rule==='DL_MAIN')return 50;if(it.rule==='BP_HIGH')return 45;
+ if(it.rule==='SQ_MED')return 35;if(it.rule==='BP_MED')return 35;
+ if(it.rule==='LOW'&&it.name==='Squat')return 25;if(it.rule==='LOW')return 25;
+ if(it.rule==='ARM_SIDE')return 12;return 10
+}
+function programStartMonday(){
+ const raw=(data&&data.program&&data.program.startDate)||seed.program.startDate;
+ const d=new Date(raw+'T00:00:00');const day=d.getDay();const diff=(day===0?-6:1-day);d.setDate(d.getDate()+diff);return d
+}
+function weekStartDate(weekNum){
+ const d=programStartMonday();d.setDate(d.getDate()+((weekNum||data.week)-1)*7);return d
+}
+function isoDate(d){return d.toISOString().slice(0,10)}
+function dateForDay(code,weekNum){
+ const d=weekStartDate(weekNum),i=DAYS.indexOf(code);d.setDate(d.getDate()+Math.max(0,i));return isoDate(d)
+}
+function availableMinutes(code){
+ const date=dateForDay(code);if(data.dateAvailability&&data.dateAvailability[date]!=null)return Number(data.dateAvailability[date])||0;
+ return Number((data.available&&data.available[code])!=null?data.available[code]:(data.defaultAvailability&&data.defaultAvailability[code]))||0
+}
+function recentDurations(it){
+ const rows=[];(data.archives||[]).forEach(function(a){(a.logs||[]).forEach(function(l){if(!l.deletedAt&&l.name===it.name&&l.type===it.type&&l.durationMinutes)rows.push(l.durationMinutes)})});
+ (data.logs||[]).forEach(function(l){if(!l.deletedAt&&l.name===it.name&&l.type===it.type&&l.durationMinutes)rows.push(l.durationMinutes)});
+ return rows.slice(-5)
+}
+function median(arr){if(!arr.length)return 0;const a=arr.slice().sort(function(x,y){return x-y}),m=Math.floor(a.length/2);return a.length%2?a[m]:(a[m-1]+a[m])/2}
+function exerciseEstimate(it){const r=recentDurations(it);return Math.round(r.length>=3?median(r):Number(it.estimatedMinutes||defaultExerciseMinutes(it)))}
+function sessionEstimate(s){return s.items.filter(function(it){return !it.deletedAt}).reduce(function(a,it){return a+exerciseEstimate(it)},0)}
+function blockById(id){return (data.blocks||[]).find(function(b){return b.id===id})}
+function currentBlock(){return blockById(data.program.currentBlockId)||(data.blocks||[])[0]}
+function currentWeekState(){if(data.days.every(isResolved))return data.draft?'COMPLETED':'COMPLETED';return data.weekState||'ACTIVE'}
+function transitionSuggestion(){
+ const d=dday(),id=data.program.currentBlockId;
+ if(d<=7&&id!=='taper')return {target:'taper',label:'Mini Taper',reason:'대회 D-'+d+' · 피로 제거 구간 권장'};
+ if(d<=21&&id!=='competition'&&id!=='taper')return {target:'competition',label:'Competition Specific',reason:'대회 D-'+d+' · 대회 특이성 전환 권장'};
+ return null
+}
 function migrate(x){
  if(!x||typeof x!=='object')x=clone(seed);
- x.version=3;x.available=x.available||clone(seed.available);x.logs=x.logs||[];x.recommendations=x.recommendations||[];x.archives=x.archives||[];x.draft=x.draft||null;x.scheduleProposal=x.scheduleProposal||null;x.streaks=x.streaks||{};x.recoveryChecks=x.recoveryChecks||[];x.bodyweightLogs=x.bodyweightLogs||[];
- x.days=(x.days||clone(seed.days)).map(function(d){d.scheduled=d.scheduled||d.d;d.status=d.status||'PLANNED';d.skipReason=d.skipReason||null;d.isCarryOver=!!d.isCarryOver;d.carriedFromWeek=d.carriedFromWeek||null;d.items=(d.items||[]).map(ensureSegments);return d});
+ x.version=4;x.available=x.available||clone(seed.available);x.defaultAvailability=x.defaultAvailability||clone(x.available);x.logs=x.logs||[];x.recommendations=x.recommendations||[];x.archives=x.archives||[];x.draft=x.draft||null;x.scheduleProposal=x.scheduleProposal||null;x.streaks=x.streaks||{};x.recoveryChecks=x.recoveryChecks||[];x.bodyweightLogs=x.bodyweightLogs||[];x.dateAvailability=x.dateAvailability||{};x.scheduleChanges=x.scheduleChanges||[];x.issueHistory=x.issueHistory||[];x.programHistory=x.programHistory||[];x.inProgress=x.inProgress||null;x.lastBackupAt=x.lastBackupAt||null;x.weekState=x.weekState||'ACTIVE';x.program=x.program||clone(seed.program);x.blocks=x.blocks||clone(seed.blocks);x.meet=x.program.competitionDate||x.meet;
+ x.days=(x.days||clone(seed.days)).map(function(d){d.scheduled=d.scheduled||d.d;d.status=d.status||'PLANNED';d.skipReason=d.skipReason||null;d.isCarryOver=!!d.isCarryOver;d.carriedFromWeek=d.carriedFromWeek||null;d.items=(d.items||[]).map(function(it){it=ensureSegments(it);it.estimatedMinutes=it.estimatedMinutes||defaultExerciseMinutes(it);it.deletedAt=it.deletedAt||null;return it});return d});
  return x;
 }
-const DB_NAME='strength-tracker-db',DB_VERSION=1,STORE='kv';
+const DB_NAME='strength-tracker-db',DB_VERSION=2,STORE='kv';
+const ENTITY_STORES=['appSettings','programs','blocks','weeks','sessions','exercises','sets','scheduleChanges','recoveryCheckins','recommendations','bodyweightLogs'];
 function openDB(){
  return new Promise(function(resolve,reject){
   if(!('indexedDB' in window))return reject(new Error('IndexedDB unavailable'));
   const req=indexedDB.open(DB_NAME,DB_VERSION);
-  req.onupgradeneeded=function(){const db=req.result;if(!db.objectStoreNames.contains(STORE))db.createObjectStore(STORE)};
+  req.onupgradeneeded=function(){const db=req.result;if(!db.objectStoreNames.contains(STORE))db.createObjectStore(STORE);ENTITY_STORES.forEach(function(s){if(!db.objectStoreNames.contains(s))db.createObjectStore(s,{keyPath:'id'})})};
   req.onsuccess=function(){resolve(req.result)};
   req.onerror=function(){reject(req.error||new Error('IndexedDB open failed'))}
  })
@@ -124,6 +171,27 @@ async function idbPut(key,value){
   tx.onerror=function(){db.close();reject(tx.error)}
  })
 }
+async function mirrorEntityStores(state){
+ const db=await openDB();
+ return new Promise(function(resolve,reject){
+  const tx=db.transaction(ENTITY_STORES,'readwrite');
+  ENTITY_STORES.forEach(function(s){tx.objectStore(s).clear()});
+  tx.objectStore('appSettings').put({id:'settings',week:state.week,weekState:state.weekState,defaultAvailability:state.defaultAvailability,dateAvailability:state.dateAvailability,lastBackupAt:state.lastBackupAt});
+  tx.objectStore('programs').put(Object.assign({id:'program-001'},state.program||{}));
+  (state.blocks||[]).forEach(function(x){tx.objectStore('blocks').put(Object.assign({},x))});
+  tx.objectStore('weeks').put({id:'week-'+state.week,weekNumber:state.week,state:state.weekState,programId:state.program.id,blockId:state.program.currentBlockId,startDate:isoDate(weekStartDate(state.week))});
+  (state.days||[]).forEach(function(s,si){
+    tx.objectStore('sessions').put({id:'w'+state.week+'-'+s.d,weekId:'week-'+state.week,day:s.d,scheduled:s.scheduled,status:s.status,plannedDate:dateForDay(s.d),scheduledDate:dateForDay(s.scheduled),estimatedMinutes:sessionEstimate(s),skipReason:s.skipReason||null});
+    (s.items||[]).forEach(function(it,ii){tx.objectStore('exercises').put({id:'w'+state.week+'-'+s.d+'-'+ii,sessionId:'w'+state.week+'-'+s.d,name:it.name,type:it.type,rule:it.rule,plan:planSnapshot(it),estimatedMinutes:exerciseEstimate(it),deletedAt:it.deletedAt||null})})
+  });
+  (state.logs||[]).forEach(function(l,li){(l.sets||[]).forEach(function(set,si){tx.objectStore('sets').put(Object.assign({id:(l.id||'log'+li)+'-set-'+si,exerciseLogId:l.id||('log'+li)},set))})});
+  (state.scheduleChanges||[]).forEach(function(x,i){tx.objectStore('scheduleChanges').put(Object.assign({id:x.id||('sc-'+i)},x))});
+  (state.recoveryChecks||[]).forEach(function(x,i){tx.objectStore('recoveryCheckins').put(Object.assign({id:x.id||('rc-'+i)},x))});
+  (state.recommendations||[]).forEach(function(x,i){tx.objectStore('recommendations').put(Object.assign({id:x.id||('rec-'+i)},x))});
+  (state.bodyweightLogs||[]).forEach(function(x){tx.objectStore('bodyweightLogs').put(Object.assign({},x))});
+  tx.oncomplete=function(){db.close();resolve()};tx.onerror=function(){db.close();reject(tx.error)}
+ })
+}
 async function loadData(){
  try{
   const saved=await idbGet('appState');
@@ -141,7 +209,7 @@ async function loadData(){
 }
 function save(){
  if(storageMode.indexOf('IndexedDB')===0){
-  idbPut('appState',data).catch(function(){
+  Promise.all([idbPut('appState',data),mirrorEntityStores(data)]).catch(function(){
    storageMode='localStorage fallback';
    localStorage.setItem(STORAGE,JSON.stringify(data))
   })
@@ -228,7 +296,7 @@ function home(){
  '<section class="card"><div class="row"><div><h2 style="margin:0;font-size:18px">다음 훈련</h2><p class="sub">'+n.scheduled+' · 예상 '+n.mins+'분'+(n.scheduled!==n.d?' · 원래 '+n.d:'')+'</p></div><span class="pill">'+(n.isCarryOver?'CARRY OVER · ':'')+'Priority '+sessionPriority(n)+'</span></div>'+
  n.items.map(function(it,i){return itemRow(n,it,i)}).join('')+
  '<button class="primary" data-open="'+n.d+'|0">▶ 훈련 시작</button></section>')+
- (pendingRecovery().length?'<section class="card"><div class="row"><div><h2 style="margin:0;font-size:18px">다음날 Recovery Check</h2><p class="sub">Side pressure progression 확정 대기</p></div><span class="tag review">'+pendingRecovery().length+' PENDING</span></div>'+pendingRecovery().map(function(x){return '<button class="exercise '+(recoveryReady(x)?'':'disabled')+'" data-recovery="'+x.id+'"><span><b>'+esc(x.name+' '+x.type)+'</b><small>'+(recoveryReady(x)?'통증 체크 가능':'내일부터 체크 가능')+'</small></span><span>›</span></button>'}).join('')+'</section>':'')+'<section class="card"><div class="row"><h2 style="font-size:18px;margin:0">이번 주 진행</h2><button class="smallbtn" data-tab="week">일정 관리</button></div>'+
+ (data.inProgress&&data.inProgress.week===data.week?'<section class="card"><div class="row"><div><h2 style="margin:0;font-size:18px">진행 중 운동</h2><p class="sub">세트가 자동 저장되어 있습니다.</p></div><span class="tag review">AUTO-SAVED</span></div><button class="primary" id="resumeWorkout">이어하기</button></section>':'')+(pendingRecovery().length?'<section class="card"><div class="row"><div><h2 style="margin:0;font-size:18px">다음날 Recovery Check</h2><p class="sub">Side pressure progression 확정 대기</p></div><span class="tag review">'+pendingRecovery().length+' PENDING</span></div>'+pendingRecovery().map(function(x){return '<button class="exercise '+(recoveryReady(x)?'':'disabled')+'" data-recovery="'+x.id+'"><span><b>'+esc(x.name+' '+x.type)+'</b><small>'+(recoveryReady(x)?'통증 체크 가능':'내일부터 체크 가능')+'</small></span><span>›</span></button>'}).join('')+'</section>':'')+'<section class="card"><div class="row"><h2 style="font-size:18px;margin:0">이번 주 진행</h2><button class="smallbtn" data-tab="week">일정 관리</button></div>'+
  '<div class="daygrid">'+data.days.slice(0,5).map(function(x){const cls=x.status==='COMPLETED'?'day done':x===n?'day today':'day';return '<div class="'+cls+'"><b>'+x.d+'</b><span class="dot">'+(x.status==='COMPLETED'?'✓':x.status==='SKIPPED'?'–':x.status==='CARRIED'?'↗':x===n?'●':'○')+'</span><small>'+esc(x.status)+'</small></div>'}).join('')+'</div><p class="muted">'+done+' / '+data.days.length+' sessions resolved</p></section>';
 }
 
@@ -241,17 +309,29 @@ function openSetEditor(index){
  '<div class="actionrow"><button class="danger" id="deleteSet" style="margin-top:12px">세트 삭제</button><button class="primary" id="saveSet">수정 저장</button></div></div></div>';
  document.body.insertAdjacentHTML('beforeend',html);
  document.getElementById('setClose').onclick=function(){document.getElementById('setModal').remove()};
- document.getElementById('deleteSet').onclick=function(){if(confirm('이 세트를 삭제할까요?')){workout.sets.splice(index,1);workout.extraSegmentId=null;syncInputToSegment(workout);document.getElementById('setModal').remove();render()}};
- document.getElementById('saveSet').onclick=function(){s.weight=Number(document.getElementById('editWeight').value)||0;s.reps=Math.max(1,Number(document.getElementById('editReps').value)||1);s.rpe=Math.min(10,Math.max(6,Number(document.getElementById('editRpe').value)||8));document.getElementById('setModal').remove();render()};
+ document.getElementById('deleteSet').onclick=function(){if(confirm('이 세트를 삭제할까요?')){workout.sets.splice(index,1);workout.extraSegmentId=null;syncInputToSegment(workout);persistWorkout();document.getElementById('setModal').remove();render()}};
+ document.getElementById('saveSet').onclick=function(){s.weight=Number(document.getElementById('editWeight').value)||0;s.reps=Math.max(1,Number(document.getElementById('editReps').value)||1);s.rpe=Math.min(10,Math.max(6,Number(document.getElementById('editRpe').value)||8));persistWorkout();document.getElementById('setModal').remove();render()};
+}
+function workoutSnapshot(){
+ if(!workout)return null;
+ return {week:data.week,day:workout.day.d,idx:workout.idx,sets:clone(workout.sets),extraSegmentId:workout.extraSegmentId||null,earlyFinish:!!workout.earlyFinish,startedAt:workout.startedAt||new Date().toISOString(),updatedAt:new Date().toISOString()}
+}
+function persistWorkout(){if(!workout)return;data.inProgress=workoutSnapshot();save()}
+function clearWorkoutProgress(){data.inProgress=null}
+function resumeWorkout(){
+ const p=data.inProgress;if(!p||p.week!==data.week)return;
+ const day=data.days.find(function(x){return x.d===p.day}),it=day&&day.items[p.idx];if(!day||!it)return;
+ workout={day:day,idx:p.idx,it:ensureSegments(it),sets:clone(p.sets||[]),extraSegmentId:p.extraSegmentId||null,earlyFinish:!!p.earlyFinish,startedAt:p.startedAt||new Date().toISOString()};
+ syncInputToSegment(workout);evalState=null;render()
 }
 function openWorkout(code){
  const parts=code.split('|'),day=data.days.find(function(x){return x.d===parts[0]}),idx=Number(parts[1]),it=ensureSegments(day.items[idx]),log=getLog(day,it);
  if(day.status==='SKIPPED'||day.status==='CARRIED')return alert('이 세션은 '+day.status+' 상태입니다. 주간 화면에서 상태를 되돌린 뒤 진행하세요.');
- workout={day:day,idx:idx,it:it,sets:log?log.sets.slice():[],extraSegmentId:null,earlyFinish:false};
+ if(data.inProgress&&data.inProgress.week===data.week&&data.inProgress.day===day.d&&data.inProgress.idx===idx&&!log){workout={day:day,idx:idx,it:it,sets:clone(data.inProgress.sets||[]),extraSegmentId:data.inProgress.extraSegmentId||null,earlyFinish:!!data.inProgress.earlyFinish,startedAt:data.inProgress.startedAt||new Date().toISOString()}}else{workout={day:day,idx:idx,it:it,sets:log?log.sets.slice():[],extraSegmentId:null,earlyFinish:false,startedAt:new Date().toISOString()}};
  // Legacy logs without segmentId belong to the top/main segment.
  const first=defaultSegments(it)[0].id;
  workout.sets=workout.sets.map(function(s){return Object.assign({segmentId:first},s)});
- syncInputToSegment(workout);evalState=null;render();
+ syncInputToSegment(workout);evalState=null;persistWorkout();render();
 }
 function renderWorkout(){
  const w=workout,it=w.it,segs=defaultSegments(it),planned=activeSegment(w),seg=inputSegment(w),plannedDone=!planned,risk=currentCombinedRisk(w.day);
@@ -363,10 +443,11 @@ function evaluate(ctx){
  data.recommendations=data.recommendations.filter(function(x){return !(x.day===w.day.d&&x.name===it.name&&x.type===it.type)});
  data.recommendations.push({day:w.day.d,name:it.name,type:it.type,verdict:verdict,next:next,nsets:nsets,nreps:nreps,max:max,last:last,msg:msg,pain:ctx.pain,tech:ctx.tech,external:ctx.external,combined:combined,segmentRecommendations:segmentRecommendations,lowStreak:lowKey?(data.streaks[lowKey]||0):null});
  data.logs=data.logs.filter(function(x){return !(x.day===w.day.d&&x.name===it.name&&x.type===it.type)});
- data.logs.push({day:w.day.d,scheduled:w.day.scheduled,name:it.name,type:it.type,sets:w.sets,evaluation:ctx,incomplete:workout.earlyFinish,completedAt:new Date().toISOString()});
+ const completedAt=new Date(),startedAt=new Date(w.startedAt||completedAt.toISOString()),durationMinutes=Math.max(1,Math.round((completedAt-startedAt)/60000));
+ data.logs.push({id:'w'+data.week+'-'+w.day.d+'-'+w.idx+'-'+Date.now(),day:w.day.d,scheduled:w.day.scheduled,name:it.name,type:it.type,sets:w.sets,evaluation:ctx,incomplete:workout.earlyFinish,startedAt:startedAt.toISOString(),completedAt:completedAt.toISOString(),durationMinutes:durationMinutes,deletedAt:null});
  const dayLogs=w.day.items.filter(function(x){return getLog(w.day,x)||(x.name===it.name&&x.type===it.type)}).length;
  if(dayLogs>=w.day.items.length)w.day.status='COMPLETED';
- save();
+ clearWorkoutProgress();save();
  const detail=segmentRecommendations.length?'<div class="card" style="box-shadow:none;background:#f6f8fb">'+segmentRecommendations.map(function(r){return '<div class="proposal"><div class="row"><b>'+esc(r.label)+'</b><span class="tag '+resultClass(r.verdict)+'">'+r.verdict+'</span></div><div>'+r.nextWeight+'kg · '+r.nextSets+'×'+r.nextReps+'</div><div class="muted">'+esc(r.msg)+' · 최고 @'+r.max+'</div></div>'}).join('')+'</div>':'<div class="card" style="box-shadow:none;background:#f6f8fb"><small class="muted">다음 제안</small><h3 style="margin:4px 0">'+next+'kg · '+nsets+'×'+nreps+'</h3></div>';
  document.getElementById('app').innerHTML='<div class="row"><button class="smallbtn" id="closeResult">‹ 홈</button><b>자동 판정</b><span></span></div><section class="card"><span class="tag '+resultClass(verdict)+'">'+verdict+'</span><h2>'+esc(it.name)+' '+esc(it.type)+'</h2><p>'+esc(msg)+'</p>'+detail+'<p class="muted">전체 최고 RPE '+max+' · 마지막 RPE '+last+' · 통증 '+ctx.pain+'</p></section>';
  document.getElementById('closeResult').onclick=function(){workout=null;evalState=null;tab='home';render()};
@@ -520,6 +601,7 @@ function settings(){
  '<section class="card"><h3>현재 데이터</h3><p class="muted">Storage: '+esc(storageMode)+' · Schema v'+data.version+' · W'+data.week+' · 보관 주차 '+data.archives.length+'개</p></section>';
 }
 function bind(){
+ if(document.getElementById('resumeWorkout'))document.getElementById('resumeWorkout').onclick=resumeWorkout;
  document.querySelectorAll('[data-tab]').forEach(function(b){b.onclick=function(){tab=b.dataset.tab;workout=null;render()}});
  document.querySelectorAll('[data-recovery]').forEach(function(b){b.onclick=function(){const x=data.recoveryChecks.find(function(q){return q.id===b.dataset.recovery});if(!x||!recoveryReady(x))return;openRecoveryCheck(b.dataset.recovery)}});
  document.querySelectorAll('[data-open]').forEach(function(b){b.onclick=function(){openWorkout(b.dataset.open)}});
@@ -530,9 +612,9 @@ function bind(){
  document.querySelectorAll('[data-w]').forEach(function(b){b.onclick=function(){weight=Math.max(0,weight+Number(b.dataset.w));document.getElementById('wval').textContent=weight}});
  document.querySelectorAll('[data-r]').forEach(function(b){b.onclick=function(){reps=Math.max(1,reps+Number(b.dataset.r));document.getElementById('rval').textContent=reps}});
  document.querySelectorAll('[data-rpe]').forEach(function(b){b.onclick=function(){rpe=Number(b.dataset.rpe);document.querySelectorAll('[data-rpe]').forEach(function(x){x.classList.toggle('sel',Number(x.dataset.rpe)===rpe)})}});
- if(document.getElementById('setdone'))document.getElementById('setdone').onclick=function(){const seg=inputSegment(workout);if(!seg)return;workout.sets.push({segmentId:seg.id,weight:weight,reps:reps,rpe:rpe,isExtra:!!workout.extraSegmentId});workout.extraSegmentId=null;syncInputToSegment(workout);render()};
- if(document.getElementById('addExtra'))document.getElementById('addExtra').onclick=function(){const segs=defaultSegments(workout.it),last=segs[segs.length-1],lastSet=workout.sets.filter(function(x){return (x.segmentId||last.id)===last.id}).slice(-1)[0];workout.extraSegmentId=last.id;weight=lastSet?lastSet.weight:last.weight;reps=lastSet?lastSet.reps:last.reps;rpe=lastSet?lastSet.rpe:8;render()};
- if(document.getElementById('earlyFinish'))document.getElementById('earlyFinish').onclick=function(){if(!workout.sets.length)return alert('최소 한 세트를 기록한 뒤 조기 종료할 수 있습니다.');workout.earlyFinish=true;renderEvaluation()};
+ if(document.getElementById('setdone'))document.getElementById('setdone').onclick=function(){const seg=inputSegment(workout);if(!seg)return;workout.sets.push({segmentId:seg.id,weight:weight,reps:reps,rpe:rpe,isExtra:!!workout.extraSegmentId,completedAt:new Date().toISOString()});workout.extraSegmentId=null;syncInputToSegment(workout);persistWorkout();render()};
+ if(document.getElementById('addExtra'))document.getElementById('addExtra').onclick=function(){const segs=defaultSegments(workout.it),last=segs[segs.length-1],lastSet=workout.sets.filter(function(x){return (x.segmentId||last.id)===last.id}).slice(-1)[0];workout.extraSegmentId=last.id;weight=lastSet?lastSet.weight:last.weight;reps=lastSet?lastSet.reps:last.reps;rpe=lastSet?lastSet.rpe:8;persistWorkout();render()};
+ if(document.getElementById('earlyFinish'))document.getElementById('earlyFinish').onclick=function(){if(!workout.sets.length)return alert('최소 한 세트를 기록한 뒤 조기 종료할 수 있습니다.');workout.earlyFinish=true;persistWorkout();renderEvaluation()};
  if(document.getElementById('finish'))document.getElementById('finish').onclick=renderEvaluation;
  if(document.getElementById('savetime'))document.getElementById('savetime').onclick=function(){document.querySelectorAll('[data-time]').forEach(function(x){data.available[x.dataset.time]=Number(x.value)||0});save();render()};
  if(document.getElementById('autoPlan'))document.getElementById('autoPlan').onclick=autoReplan;
