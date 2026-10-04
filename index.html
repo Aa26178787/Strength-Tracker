@@ -85,7 +85,7 @@ function syncInputToSegment(w){
 function migrate(x){
  if(!x||typeof x!=='object')x=clone(seed);
  x.version=2;x.available=x.available||clone(seed.available);x.logs=x.logs||[];x.recommendations=x.recommendations||[];x.archives=x.archives||[];x.draft=x.draft||null;x.scheduleProposal=x.scheduleProposal||null;x.streaks=x.streaks||{};
- x.days=(x.days||clone(seed.days)).map(function(d){d.scheduled=d.scheduled||d.d;d.status=d.status||'PLANNED';d.skipReason=d.skipReason||null;d.items=(d.items||[]).map(ensureSegments);return d});
+ x.days=(x.days||clone(seed.days)).map(function(d){d.scheduled=d.scheduled||d.d;d.status=d.status||'PLANNED';d.skipReason=d.skipReason||null;d.isCarryOver=!!d.isCarryOver;d.carriedFromWeek=d.carriedFromWeek||null;d.items=(d.items||[]).map(ensureSegments);return d});
  return x;
 }
 function load(){try{return migrate(JSON.parse(localStorage.getItem(STORAGE))||clone(seed))}catch(e){return migrate(clone(seed))}}
@@ -149,7 +149,7 @@ function home(){
  '<section class="card meet"><span style="font-size:26px">🏆</span><div><b>대회 D-'+dday()+'</b><small>2026.11.29 · 67kg급</small></div></section>'+
  (all?
  '<section class="card"><span class="tag progress">WEEK RESOLVED</span><h2>W'+data.week+' 주간 Review 준비 완료</h2><p class="muted">완료·Skip·Carry Over 처리가 모두 끝났습니다.</p><button class="primary" data-tab="week">주간 Review 열기</button></section>':
- '<section class="card"><div class="row"><div><h2 style="margin:0;font-size:18px">다음 훈련</h2><p class="sub">'+n.scheduled+' · 예상 '+n.mins+'분'+(n.scheduled!==n.d?' · 원래 '+n.d:'')+'</p></div><span class="pill">Priority '+sessionPriority(n)+'</span></div>'+
+ '<section class="card"><div class="row"><div><h2 style="margin:0;font-size:18px">다음 훈련</h2><p class="sub">'+n.scheduled+' · 예상 '+n.mins+'분'+(n.scheduled!==n.d?' · 원래 '+n.d:'')+'</p></div><span class="pill">'+(n.isCarryOver?'CARRY OVER · ':'')+'Priority '+sessionPriority(n)+'</span></div>'+
  n.items.map(function(it,i){return itemRow(n,it,i)}).join('')+
  '<button class="primary" data-open="'+n.d+'|0">▶ 훈련 시작</button></section>')+
  '<section class="card"><div class="row"><h2 style="font-size:18px;margin:0">이번 주 진행</h2><button class="smallbtn" data-tab="week">일정 관리</button></div>'+
@@ -272,7 +272,7 @@ function evaluate(ctx){
 function dayScheduleHtml(dayCode){
  const list=sessionsOn(dayCode),risk=riskFor(list,dayCode),mins=list.reduce(function(a,s){return a+s.mins},0),avail=Number(data.available[dayCode]||0);
  return '<div class="dayblock"><div class="dayhead"><div><h3>'+dayCode+'</h3><div class="statusline">'+mins+' / '+avail+'분</div></div><span class="risk '+risk.level.toLowerCase()+'">'+risk.level+'</span></div>'+
- (list.length?list.map(function(s){return '<div class="session-card '+risk.level.toLowerCase()+'"><div class="row"><div><b>'+esc(s.label)+'</b><small class="muted">Priority '+sessionPriority(s)+' · 원래 '+s.d+(s.scheduled!==s.d?' → '+s.scheduled:'')+'</small></div><button class="smallbtn" data-sched="'+s.d+'">일정 변경</button></div></div>'}).join(''):'<p class="muted">배정된 세션 없음</p>')+'</div>';
+ (list.length?list.map(function(s){return '<div class="session-card '+risk.level.toLowerCase()+'"><div class="row"><div><b>'+esc(s.label)+'</b><small class="muted">'+(s.isCarryOver?'Carry Over from W'+s.carriedFromWeek+' · ':'')+'Priority '+sessionPriority(s)+' · 원래 '+s.d+(s.scheduled!==s.d?' → '+s.scheduled:'')+'</small></div><button class="smallbtn" data-sched="'+s.d+'">일정 변경</button></div></div>'}).join(''):'<p class="muted">배정된 세션 없음</p>')+'</div>';
 }
 function autoReplan(){
  const active=data.days.filter(function(s){return s.status==='PLANNED'}).slice().sort(function(a,b){return 'ABCD'.indexOf(sessionPriority(a))-'ABCD'.indexOf(sessionPriority(b))});
@@ -314,7 +314,9 @@ function generateDraft(){
  const resolved=data.days.every(isResolved);if(!resolved)return alert('아직 미완료 세션이 있습니다. 완료·Skip·Carry Over 중 하나로 처리해 주세요.');
  const days=clone(data.days).map(function(s){
    const old=data.days.find(function(x){return x.d===s.d});s.status='PLANNED';s.scheduled=s.d;s.skipReason=null;
-   s.items=s.items.map(function(it){const r=getRec(old,it);if(old.status==='COMPLETED'&&r){if(r.segmentRecommendations&&r.segmentRecommendations.length){it.segments=defaultSegments(it).map(function(seg){const rr=r.segmentRecommendations.find(function(x){return x.id===seg.id});return rr?Object.assign({},seg,{weight:rr.nextWeight,sets:rr.nextSets,reps:rr.nextReps}):seg});const top=it.segments[0];it.weight=top.weight;it.sets=top.sets;it.reps=top.reps}else{it.weight=r.next;it.sets=r.nsets;it.reps=r.nreps;if(it.segments&&it.segments.length===1)it.segments[0]=Object.assign({},it.segments[0],{weight:r.next,sets:r.nsets,reps:r.nreps})}}it.systemPlan=planSnapshot(it);it.override=null;return it});
+   s.isCarryOver=old.status==='CARRIED';s.carriedFromWeek=s.isCarryOver?data.week:null;
+   s.label=s.isCarryOver?(old.label.replace(/^↗ Carry Over · /,'')+' · Carry Over'):old.label.replace(/ · Carry Over$/,'');
+   s.items=s.items.map(function(it){const r=getRec(old,it);if(old.status==='COMPLETED'&&r){if(r.segmentRecommendations&&r.segmentRecommendations.length){it.segments=defaultSegments(it).map(function(seg){const rr=r.segmentRecommendations.find(function(x){return x.id===seg.id});return rr?Object.assign({},seg,{weight:rr.nextWeight,sets:rr.nextSets,reps:rr.nextReps}):seg});const top=it.segments[0];it.weight=top.weight;it.sets=top.sets;it.reps=top.reps}else{it.weight=r.next;it.sets=r.nsets;it.reps=r.nreps;if(it.segments&&it.segments.length===1)it.segments[0]=Object.assign({},it.segments[0],{weight:r.next,sets:r.nsets,reps:r.nreps})}}if(old.status!=='COMPLETED'){it.segments=defaultSegments(it).map(function(seg){return Object.assign({},seg)});const top=it.segments[0];it.weight=top.weight;it.sets=top.sets;it.reps=top.reps}it.systemPlan=planSnapshot(it);it.override=null;return it});
    return s;
  });
  data.draft={week:data.week+1,createdAt:new Date().toISOString(),days:days};save();render();
@@ -359,9 +361,9 @@ function week(){
  (data.scheduleProposal?'<section class="card"><div class="row"><h3>자동 재배치 Draft</h3><button class="smallbtn" id="discardProposal">취소</button></div>'+data.scheduleProposal.map(function(p){return '<div class="proposal"><b>'+esc(p.label)+'</b><div class="muted">'+p.from+' → '+p.to+(p.from===p.to?' · 유지':'')+'</div></div>'}).join('')+'<button class="primary" id="applyProposal">이 일정 적용</button></section>':'')+
  '<section class="card"><h3>현재 배치</h3>'+DAYS.map(dayScheduleHtml).join('')+'</section>'+
  '<section class="card"><div class="row"><div><h3 style="margin:0">W'+data.week+' Review</h3><p class="muted">'+resolvedCount+' / '+data.days.length+' sessions resolved</p></div><span class="tag '+(resolved?'progress':'hold')+'">'+(resolved?'READY':'IN PROGRESS')+'</span></div>'+
- '<div class="reviewgrid">'+data.days.map(function(s){return '<div class="reviewrow"><div><b>'+s.d+' · '+esc(s.label)+'</b><small class="muted">'+s.status+(s.skipReason?' · '+esc(s.skipReason):'')+'</small></div><span>'+s.items.map(function(it){const r=getRec(s,it);return r?'<span class="tag '+resultClass(r.verdict)+'">'+r.verdict+(r.lowStreak!==null&&r.lowStreak!==undefined?' · '+r.lowStreak+'/2':'')+'</span>':''}).join(' ')+'</span></div>'}).join('')+'</div>'+
+ '<div class="reviewgrid">'+data.days.map(function(s){return '<div class="reviewrow"><div><b>'+s.d+' · '+esc(s.label)+'</b><small class="muted">'+s.status+(s.isCarryOver&&s.carriedFromWeek?' · from W'+s.carriedFromWeek:'')+(s.skipReason?' · '+esc(s.skipReason):'')+'</small></div><span>'+s.items.map(function(it){const r=getRec(s,it);return r?'<span class="tag '+resultClass(r.verdict)+'">'+r.verdict+(r.lowStreak!==null&&r.lowStreak!==undefined?' · '+r.lowStreak+'/2':'')+'</span>':''}).join(' ')+'</span></div>'}).join('')+'</div>'+
  (!data.draft?'<button class="primary '+(resolved?'':'disabled')+'" id="makeDraft">W'+(data.week+1)+' Draft 생성</button>':
- '<div class="draftbox"><div class="row"><b>W'+data.draft.week+' DRAFT</b><span class="pill">미확정</span></div>'+data.draft.days.map(function(s){return '<div class="proposal"><b>'+s.d+' · '+esc(s.label)+'</b>'+s.items.map(function(it,idx){return '<div class="session-card"><div class="row"><div><b>'+esc(it.name+' '+it.type)+'</b><div class="muted">'+esc(segmentSummary(it))+'</div>'+(it.override?'<div class="muted">Override · '+esc(it.override.reason)+(it.override.note?' · '+esc(it.override.note):'')+'</div>':'')+'</div><button class="smallbtn" data-draft-edit="'+s.d+'|'+idx+'">'+(it.override?'수정됨':'수정')+'</button></div></div>'}).join('')+'</div>'}).join('')+'<div class="actionrow"><button class="ghost" id="discardDraft">Draft 삭제</button><button class="primary" id="confirmDraft" style="margin-top:0">W'+data.draft.week+' 확정</button></div></div>')+
+ '<div class="draftbox"><div class="row"><b>W'+data.draft.week+' DRAFT</b><span class="pill">미확정</span></div>'+data.draft.days.map(function(s){return '<div class="proposal"><div class="row"><b>'+s.d+' · '+esc(s.label)+'</b>'+(s.isCarryOver?'<span class="tag review">CARRY OVER</span>':'')+'</div>'+s.items.map(function(it,idx){return '<div class="session-card"><div class="row"><div><b>'+esc(it.name+' '+it.type)+'</b><div class="muted">'+esc(segmentSummary(it))+'</div>'+(it.override?'<div class="muted">Override · '+esc(it.override.reason)+(it.override.note?' · '+esc(it.override.note):'')+'</div>':'')+'</div><button class="smallbtn" data-draft-edit="'+s.d+'|'+idx+'">'+(it.override?'수정됨':'수정')+'</button></div></div>'}).join('')+'</div>'}).join('')+'<div class="actionrow"><button class="ghost" id="discardDraft">Draft 삭제</button><button class="primary" id="confirmDraft" style="margin-top:0">W'+data.draft.week+' 확정</button></div></div>')+
  '</section>';
 }
 function history(){
