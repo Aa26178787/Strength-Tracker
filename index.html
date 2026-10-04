@@ -306,10 +306,38 @@ function generateDraft(){
  const resolved=data.days.every(isResolved);if(!resolved)return alert('아직 미완료 세션이 있습니다. 완료·Skip·Carry Over 중 하나로 처리해 주세요.');
  const days=clone(data.days).map(function(s){
    const old=data.days.find(function(x){return x.d===s.d});s.status='PLANNED';s.scheduled=s.d;s.skipReason=null;
-   s.items=s.items.map(function(it){const r=getRec(old,it);if(old.status==='COMPLETED'&&r){if(r.segmentRecommendations&&r.segmentRecommendations.length){it.segments=defaultSegments(it).map(function(seg){const rr=r.segmentRecommendations.find(function(x){return x.id===seg.id});return rr?Object.assign({},seg,{weight:rr.nextWeight,sets:rr.nextSets,reps:rr.nextReps}):seg});const top=it.segments[0];it.weight=top.weight;it.sets=top.sets;it.reps=top.reps}else{it.weight=r.next;it.sets=r.nsets;it.reps=r.nreps;if(it.segments&&it.segments.length===1)it.segments[0]=Object.assign({},it.segments[0],{weight:r.next,sets:r.nsets,reps:r.nreps})}}return it});
+   s.items=s.items.map(function(it){const r=getRec(old,it);if(old.status==='COMPLETED'&&r){if(r.segmentRecommendations&&r.segmentRecommendations.length){it.segments=defaultSegments(it).map(function(seg){const rr=r.segmentRecommendations.find(function(x){return x.id===seg.id});return rr?Object.assign({},seg,{weight:rr.nextWeight,sets:rr.nextSets,reps:rr.nextReps}):seg});const top=it.segments[0];it.weight=top.weight;it.sets=top.sets;it.reps=top.reps}else{it.weight=r.next;it.sets=r.nsets;it.reps=r.nreps;if(it.segments&&it.segments.length===1)it.segments[0]=Object.assign({},it.segments[0],{weight:r.next,sets:r.nsets,reps:r.nreps})}}it.systemPlan=planSnapshot(it);it.override=null;return it});
    return s;
  });
  data.draft={week:data.week+1,createdAt:new Date().toISOString(),days:days};save();render();
+}
+function planSnapshot(it){return {weight:it.weight,sets:it.sets,reps:it.reps,segments:clone(defaultSegments(it))}}
+function openDraftEditor(dayId,itemIndex){
+ if(!data.draft)return;
+ const s=data.draft.days.find(function(x){return x.d===dayId}),it=s&&s.items[itemIndex];if(!it)return;
+ const segs=defaultSegments(it),sys=it.systemPlan||planSnapshot(it);
+ const body=segs.map(function(seg,idx){return '<div class="session-card"><b>'+esc(seg.label)+'</b><div class="timegrid" style="grid-template-columns:repeat(3,1fr);margin-top:8px"><label>kg<input data-dw="'+idx+'" type="number" step="2.5" value="'+seg.weight+'"></label><label>세트<input data-ds="'+idx+'" type="number" min="1" value="'+seg.sets+'"></label><label>반복<input data-dr="'+idx+'" type="number" min="1" value="'+seg.reps+'"></label></div></div>'}).join('');
+ const html='<div class="modal-center" id="draftModal"><div class="modal-card"><div class="row"><div><h2 style="margin:0">Draft Override</h2><p class="muted">'+esc(s.d+' · '+it.name+' '+it.type)+'</p></div><button class="smallbtn" id="draftClose">닫기</button></div>'+
+ '<div class="banner info">시스템 추천: '+esc((sys.segments&&sys.segments.length?sys.segments.map(function(x){return x.label+' '+x.weight+'kg '+x.sets+'×'+x.reps}).join(' / '):sys.weight+'kg '+sys.sets+'×'+sys.reps))+'</div>'+
+ body+'<span class="label">변경 이유</span><select id="draftReasonPreset" class="textarea" style="min-height:44px"><option value="">선택</option><option>피로도 조절</option><option>기술 적응 우선</option><option>일정 문제</option><option>대회 준비</option><option>컨디션</option><option>기타</option></select><textarea id="draftReason" class="textarea" placeholder="세부 이유 (선택)">'+esc(it.override&&it.override.note||'')+'</textarea>'+
+ '<div class="actionrow"><button class="ghost" id="draftReset">시스템 추천으로 복원</button><button class="primary" id="draftSave" style="margin-top:0">변경 저장</button></div></div></div>';
+ document.body.insertAdjacentHTML('beforeend',html);
+ document.getElementById('draftClose').onclick=function(){document.getElementById('draftModal').remove()};
+ document.getElementById('draftReset').onclick=function(){
+   it.weight=sys.weight;it.sets=sys.sets;it.reps=sys.reps;it.segments=clone(sys.segments);it.override=null;save();document.getElementById('draftModal').remove();render()
+ };
+ document.getElementById('draftSave').onclick=function(){
+   const cur=defaultSegments(it);
+   cur.forEach(function(seg,idx){
+     seg.weight=Number(document.querySelector('[data-dw="'+idx+'"]').value)||0;
+     seg.sets=Math.max(1,Number(document.querySelector('[data-ds="'+idx+'"]').value)||1);
+     seg.reps=Math.max(1,Number(document.querySelector('[data-dr="'+idx+'"]').value)||1);
+   });
+   it.segments=cur;it.weight=cur[0].weight;it.sets=cur[0].sets;it.reps=cur[0].reps;
+   const preset=document.getElementById('draftReasonPreset').value,note=document.getElementById('draftReason').value||'';
+   it.override={reason:preset||'기타',note:note,changedAt:new Date().toISOString(),systemPlan:clone(sys),selectedPlan:planSnapshot(it)};
+   save();document.getElementById('draftModal').remove();render()
+ };
 }
 function confirmDraft(){
  if(!data.draft)return;
@@ -325,7 +353,7 @@ function week(){
  '<section class="card"><div class="row"><div><h3 style="margin:0">W'+data.week+' Review</h3><p class="muted">'+resolvedCount+' / '+data.days.length+' sessions resolved</p></div><span class="tag '+(resolved?'progress':'hold')+'">'+(resolved?'READY':'IN PROGRESS')+'</span></div>'+
  '<div class="reviewgrid">'+data.days.map(function(s){return '<div class="reviewrow"><div><b>'+s.d+' · '+esc(s.label)+'</b><small class="muted">'+s.status+(s.skipReason?' · '+esc(s.skipReason):'')+'</small></div><span>'+s.items.map(function(it){const r=getRec(s,it);return r?'<span class="tag '+resultClass(r.verdict)+'">'+r.verdict+'</span>':''}).join(' ')+'</span></div>'}).join('')+'</div>'+
  (!data.draft?'<button class="primary '+(resolved?'':'disabled')+'" id="makeDraft">W'+(data.week+1)+' Draft 생성</button>':
- '<div class="draftbox"><div class="row"><b>W'+data.draft.week+' DRAFT</b><span class="pill">미확정</span></div>'+data.draft.days.map(function(s){return '<div class="proposal"><b>'+s.d+' · '+esc(s.label)+'</b><div class="muted">'+s.items.map(function(it){return it.name+' · '+segmentSummary(it)}).join(' / ')+'</div></div>'}).join('')+'<div class="actionrow"><button class="ghost" id="discardDraft">Draft 삭제</button><button class="primary" id="confirmDraft" style="margin-top:0">W'+data.draft.week+' 확정</button></div></div>')+
+ '<div class="draftbox"><div class="row"><b>W'+data.draft.week+' DRAFT</b><span class="pill">미확정</span></div>'+data.draft.days.map(function(s){return '<div class="proposal"><b>'+s.d+' · '+esc(s.label)+'</b>'+s.items.map(function(it,idx){return '<div class="session-card"><div class="row"><div><b>'+esc(it.name+' '+it.type)+'</b><div class="muted">'+esc(segmentSummary(it))+'</div>'+(it.override?'<div class="muted">Override · '+esc(it.override.reason)+(it.override.note?' · '+esc(it.override.note):'')+'</div>':'')+'</div><button class="smallbtn" data-draft-edit="'+s.d+'|'+idx+'">'+(it.override?'수정됨':'수정')+'</button></div></div>'}).join('')+'</div>'}).join('')+'<div class="actionrow"><button class="ghost" id="discardDraft">Draft 삭제</button><button class="primary" id="confirmDraft" style="margin-top:0">W'+data.draft.week+' 확정</button></div></div>')+
  '</section>';
 }
 function history(){
@@ -341,6 +369,7 @@ function bind(){
  document.querySelectorAll('[data-tab]').forEach(function(b){b.onclick=function(){tab=b.dataset.tab;workout=null;render()}});
  document.querySelectorAll('[data-open]').forEach(function(b){b.onclick=function(){openWorkout(b.dataset.open)}});
  document.querySelectorAll('[data-sched]').forEach(function(b){b.onclick=function(){openScheduleEditor(b.dataset.sched)}});
+ document.querySelectorAll('[data-draft-edit]').forEach(function(b){b.onclick=function(){const p=b.dataset.draftEdit.split('|');openDraftEditor(p[0],Number(p[1]))}});
  if(document.getElementById('back'))document.getElementById('back').onclick=function(){workout=null;render()};
  document.querySelectorAll('[data-w]').forEach(function(b){b.onclick=function(){weight=Math.max(0,weight+Number(b.dataset.w));document.getElementById('wval').textContent=weight}});
  document.querySelectorAll('[data-r]').forEach(function(b){b.onclick=function(){reps=Math.max(1,reps+Number(b.dataset.r));document.getElementById('rval').textContent=reps}});
