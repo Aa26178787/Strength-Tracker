@@ -138,7 +138,7 @@ function transitionSuggestion(){
 }
 function migrate(x){
  if(!x||typeof x!=='object')x=clone(seed);
- x.version=4;x.available=x.available||clone(seed.available);x.defaultAvailability=x.defaultAvailability||clone(x.available);x.logs=x.logs||[];x.recommendations=x.recommendations||[];x.archives=x.archives||[];x.draft=x.draft||null;x.scheduleProposal=x.scheduleProposal||null;x.streaks=x.streaks||{};x.recoveryChecks=x.recoveryChecks||[];x.bodyweightLogs=x.bodyweightLogs||[];x.dateAvailability=x.dateAvailability||{};x.scheduleChanges=x.scheduleChanges||[];x.issueHistory=x.issueHistory||[];x.programHistory=x.programHistory||[];x.inProgress=x.inProgress||null;x.lastBackupAt=x.lastBackupAt||null;x.weekState=x.weekState||'ACTIVE';x.program=x.program||clone(seed.program);x.blocks=x.blocks||clone(seed.blocks);x.meet=x.program.competitionDate||x.meet;
+ x.version=5;x.available=x.available||clone(seed.available);x.defaultAvailability=x.defaultAvailability||clone(x.available);x.logs=x.logs||[];x.recommendations=x.recommendations||[];x.archives=x.archives||[];x.draft=x.draft||null;x.scheduleProposal=x.scheduleProposal||null;x.streaks=x.streaks||{};x.recoveryChecks=x.recoveryChecks||[];x.bodyweightLogs=x.bodyweightLogs||[];x.dateAvailability=x.dateAvailability||{};x.scheduleChanges=x.scheduleChanges||[];x.volumeProposal=x.volumeProposal||null;x.historyFilter=x.historyFilter||{exercise:'ALL',type:'ALL',showDeleted:false};x.issueHistory=x.issueHistory||[];x.programHistory=x.programHistory||[];x.inProgress=x.inProgress||null;x.lastBackupAt=x.lastBackupAt||null;x.weekState=x.weekState||'ACTIVE';x.program=x.program||clone(seed.program);x.blocks=x.blocks||clone(seed.blocks);x.meet=x.program.competitionDate||x.meet;
  x.days=(x.days||clone(seed.days)).map(function(d){d.scheduled=d.scheduled||d.d;d.status=d.status||'PLANNED';d.skipReason=d.skipReason||null;d.isCarryOver=!!d.isCarryOver;d.carriedFromWeek=d.carriedFromWeek||null;d.items=(d.items||[]).map(function(it){it=ensureSegments(it);it.estimatedMinutes=it.estimatedMinutes||defaultExerciseMinutes(it);it.deletedAt=it.deletedAt||null;return it});return d});
  return x;
 }
@@ -245,9 +245,85 @@ function sessionProfile(s){
 function sessionsOn(day,override){
  return data.days.filter(function(s){if(isResolved(s))return false;const at=override&&override[s.d]?override[s.d]:s.scheduled;return at===day});
 }
+function rulePriority(it){
+ if(['SQ_HIGH','BP_HIGH','DL_MAIN'].includes(it.rule))return 'A';
+ if(['SQ_MED','BP_MED'].includes(it.rule))return 'B';
+ if(it.rule==='LOW')return 'C';
+ return 'D'
+}
+function recoveryPairs(){
+ return [
+  {from:'SQ_HIGH',to:'SQ_MED',days:3,label:'SQ High → SQ Medium 72h'},
+  {from:'SQ_HIGH',to:'LOW',name:'Squat',days:2,label:'SQ High → SQ Low 48h'},
+  {from:'BP_HIGH',to:'BP_MED',days:2,label:'BP High → BP Medium 48h'},
+  {from:'BP_HIGH',to:'LOW',name:'Bench Press',days:1,label:'BP High → BP Low 24h'},
+  {from:'DL_MAIN',to:'SQ_HIGH',days:2,label:'DL Main → SQ High 48h'},
+  {from:'ARM_SIDE',to:'BP_HIGH',days:1,label:'Heavy Arm → BP High 24h'}
+ ]
+}
+function scheduledRuleDays(override){
+ const out=[];
+ data.days.filter(function(s){return !isResolved(s)}).forEach(function(s){
+  const d=override&&override[s.d]?override[s.d]:s.scheduled,idx=DAYS.indexOf(d);
+  s.items.filter(function(it){return !it.deletedAt}).forEach(function(it){out.push({rule:it.rule,name:it.name,day:d,idx:idx,session:s})})
+ });
+ return out
+}
+function recoveryWarnings(override){
+ const rows=scheduledRuleDays(override),warnings=[];
+ recoveryPairs().forEach(function(p){
+  rows.filter(function(x){return x.rule===p.from}).forEach(function(a){
+   rows.filter(function(x){return x.rule===p.to&&(!p.name||x.name===p.name)}).forEach(function(b){
+    const gap=b.idx-a.idx;if(gap>=0&&gap<p.days)warnings.push(p.label+' 부족 ('+a.day+' → '+b.day+')')
+   })
+  })
+ });
+ return [...new Set(warnings)]
+}
+function estimateDay(dayCode){
+ return sessionsOn(dayCode).reduce(function(a,s){return a+sessionEstimate(s)},0)
+}
+function buildVolumeProposal(dayCode){
+ const avail=availableMinutes(dayCode),sessions=sessionsOn(dayCode),total=sessions.reduce(function(a,s){return a+sessionEstimate(s)},0);
+ if(total<=avail)return null;
+ let shortage=total-avail,changes=[];
+ const candidates=[];
+ sessions.forEach(function(s){s.items.forEach(function(it,idx){if(it.deletedAt)return;const p=rulePriority(it);if(p==='A')return;candidates.push({s:s,it:it,idx:idx,p:p})})});
+ candidates.sort(function(a,b){return 'DCB'.indexOf(a.p)-'DCB'.indexOf(b.p)});
+ candidates.forEach(function(x){
+  if(shortage<=0)return;
+  const segs=defaultSegments(x.it),newSegs=clone(segs),perSet=Math.max(5,Math.round(exerciseEstimate(x.it)/Math.max(1,segs.reduce(function(a,s){return a+s.sets},0))));
+  for(let i=newSegs.length-1;i>=0&&shortage>0;i--){
+   while(newSegs[i].sets>1&&shortage>0){newSegs[i].sets--;shortage-=perSet}
+  }
+  const before=segs.reduce(function(a,s){return a+s.sets},0),after=newSegs.reduce(function(a,s){return a+s.sets},0);
+  if(after<before)changes.push({day:x.s.d,itemIndex:x.idx,name:x.it.name,type:x.it.type,before:before,after:after,segments:newSegs})
+ });
+ return {day:dayCode,total:total,available:avail,remainingShortage:Math.max(0,shortage),changes:changes}
+}
+function applyVolumeProposal(){
+ const p=data.volumeProposal;if(!p)return;
+ p.changes.forEach(function(ch){const s=data.days.find(function(x){return x.d===ch.day}),it=s&&s.items[ch.itemIndex];if(!it)return;it.segments=clone(ch.segments);const top=it.segments[0];it.sets=top.sets;it.reps=top.reps;it.weight=top.weight});
+ data.scheduleChanges.push({id:'vol-'+Date.now(),type:'VOLUME_REDUCTION',week:data.week,day:p.day,changes:clone(p.changes),createdAt:new Date().toISOString()});
+ data.volumeProposal=null;save();render()
+}
+function moveExercise(sourceDay,itemIndex,targetDay){
+ const source=data.days.find(function(x){return x.d===sourceDay});if(!source||!source.items[itemIndex])return;
+ const it=source.items[itemIndex],orig=it.originDay||source.d;
+ let target=data.days.find(function(x){return x.d===targetDay});
+ if(!target){target={d:targetDay,scheduled:targetDay,label:'Split Session',mins:exerciseEstimate(it),status:'PLANNED',items:[]};data.days.push(target)}
+ source.items.splice(itemIndex,1);
+ it.originDay=orig;it.movedForWeek=data.week;target.items.push(it);
+ source.label=source.items.length?source.items.map(function(x){return x.name+' '+x.type}).join(' + '):'Empty Session';
+ target.label=target.items.map(function(x){return x.name+' '+x.type}).join(' + ');
+ source.mins=sessionEstimate(source);target.mins=sessionEstimate(target);
+ if(!source.items.length)source.status='SKIPPED',source.skipReason='Program Decision';
+ data.scheduleChanges.push({id:'moveex-'+Date.now(),type:'MOVE_EXERCISE',week:data.week,exercise:it.name+' '+it.type,from:sourceDay,to:targetDay,createdAt:new Date().toISOString()});
+ save();render()
+}
 function riskFor(list,day){
  if(!list.length)return {level:'GREEN',reasons:[],mins:0};
- const mins=list.reduce(function(a,s){return a+s.mins},0),available=Number(data.available[day]||0),reasons=[];
+ const mins=list.reduce(function(a,s){return a+sessionEstimate(s)},0),available=availableMinutes(day),reasons=[];
  let level='GREEN';
  if(available===0){level='RED';reasons.push('운동 가능 시간이 0분입니다.')}
  else if(mins>available){level='RED';reasons.push('예상 '+mins+'분 > 가능 '+available+'분')}
@@ -454,44 +530,51 @@ function evaluate(ctx){
 }
 
 function dayScheduleHtml(dayCode){
- const list=sessionsOn(dayCode),risk=riskFor(list,dayCode),mins=list.reduce(function(a,s){return a+s.mins},0),avail=Number(data.available[dayCode]||0);
+ const list=sessionsOn(dayCode),risk=riskFor(list,dayCode),mins=list.reduce(function(a,s){return a+sessionEstimate(s)},0),avail=availableMinutes(dayCode);
  return '<div class="dayblock"><div class="dayhead"><div><h3>'+dayCode+'</h3><div class="statusline">'+mins+' / '+avail+'분</div></div><span class="risk '+risk.level.toLowerCase()+'">'+risk.level+'</span></div>'+
  (list.length?list.map(function(s){return '<div class="session-card '+risk.level.toLowerCase()+'"><div class="row"><div><b>'+esc(s.label)+'</b><small class="muted">'+(s.isCarryOver?'Carry Over from W'+s.carriedFromWeek+' · ':'')+'Priority '+sessionPriority(s)+' · 원래 '+s.d+(s.scheduled!==s.d?' → '+s.scheduled:'')+'</small></div><button class="smallbtn" data-sched="'+s.d+'">일정 변경</button></div></div>'}).join(''):'<p class="muted">배정된 세션 없음</p>')+'</div>';
 }
 function autoReplan(){
- const active=data.days.filter(function(s){return s.status==='PLANNED'}).slice().sort(function(a,b){return 'ABCD'.indexOf(sessionPriority(a))-'ABCD'.indexOf(sessionPriority(b))});
+ const active=data.days.filter(function(s){return s.status==='PLANNED'&&s.items.length}).slice().sort(function(a,b){return 'ABCD'.indexOf(sessionPriority(a))-'ABCD'.indexOf(sessionPriority(b))});
  const override={},assigned={};DAYS.forEach(function(d){assigned[d]=[]});
  active.forEach(function(s){
    let best=s.scheduled,bestScore=1e9;
    DAYS.forEach(function(d){
-     if(Number(data.available[d]||0)<=0)return;
-     const tentative=assigned[d].concat([s]),risk=riskFor(tentative,d),mins=tentative.reduce(function(a,x){return a+x.mins},0),overflow=Math.max(0,mins-Number(data.available[d]||0));
-     let score=overflow*20+(risk.level==='RED'?500:risk.level==='YELLOW'?100:0)+Math.abs(DAYS.indexOf(d)-DAYS.indexOf(s.d))*6;
+     if(availableMinutes(d)<=0)return;
+     const tentative=assigned[d].concat([s]),risk=riskFor(tentative,d),mins=tentative.reduce(function(a,x){return a+sessionEstimate(x)},0),overflow=Math.max(0,mins-availableMinutes(d));
+     const test=Object.assign({},override);test[s.d]=d;const rw=recoveryWarnings(test).length;
+     let score=overflow*20+(risk.level==='RED'?500:risk.level==='YELLOW'?100:0)+rw*120+Math.abs(DAYS.indexOf(d)-DAYS.indexOf(s.d))*6;
      if(sessionPriority(s)==='A'&&d==='SUN')score+=20;
      if(score<bestScore){bestScore=score;best=d}
    });
    override[s.d]=best;assigned[best].push(s);
  });
- data.scheduleProposal=active.map(function(s){return {id:s.d,from:s.scheduled,to:override[s.d],label:s.label}});save();render();
+ const warns=recoveryWarnings(override);
+ data.scheduleProposal=active.map(function(s){return {id:s.d,from:s.scheduled,to:override[s.d],label:s.label}});data.scheduleProposalWarnings=warns;save();render();
 }
 function applyProposal(){
  if(!data.scheduleProposal)return;
  const map={};data.scheduleProposal.forEach(function(x){map[x.id]=x.to});
  const redDays=DAYS.filter(function(d){return riskFor(data.days.filter(function(s){return s.status==='PLANNED'&&(map[s.d]||s.scheduled)===d}),d).level==='RED'});
  if(redDays.length&&!confirm('제안안에도 RED 조합이 있습니다: '+redDays.join(', ')+'\\n그래도 적용할까요?'))return;
- data.days.forEach(function(s){if(map[s.d])s.scheduled=map[s.d]});data.scheduleProposal=null;save();render();
+ const rw=recoveryWarnings(map);if(rw.length&&!confirm('회복 간격 경고:\n'+rw.join('\n')+'\n그래도 적용할까요?'))return;
+ data.days.forEach(function(s){if(map[s.d]&&s.scheduled!==map[s.d]){data.scheduleChanges.push({id:'sc-'+Date.now()+'-'+s.d,type:'MOVE_SESSION',week:data.week,session:s.d,from:s.scheduled,to:map[s.d],createdAt:new Date().toISOString()});s.scheduled=map[s.d]}});
+ data.scheduleProposal=null;data.scheduleProposalWarnings=[];save();render();
 }
 function openScheduleEditor(id){
  const s=data.days.find(function(x){return x.d===id});if(!s)return;
- const html='<div class="modal-center" id="schedModal"><div class="modal-card"><div class="row"><div><h2 style="margin:0">일정 변경</h2><p class="muted">'+esc(s.label)+' · 원래 '+s.d+'</p></div><button class="smallbtn" id="schedClose">닫기</button></div>'+
- '<span class="label">이동/병합할 날짜</span><div class="target-grid">'+DAYS.map(function(d){const list=sessionsOn(d).filter(function(x){return x.d!==s.d}).concat([s]),risk=riskFor(list,d);return '<button data-move="'+d+'">'+d+'<br><span class="risk '+risk.level.toLowerCase()+'" style="margin-top:4px">'+risk.level+'</span></button>'}).join('')+'</div>'+
- '<span class="label">이번 주 처리</span><div class="actionrow"><button class="ghost" id="skipSession">이번 주 Skip</button><button class="ghost" id="carrySession">다음 주 Carry Over</button></div>'+
+ const html='<div class="modal-center" id="schedModal"><div class="modal-card"><div class="row"><div><h2 style="margin:0">일정 변경</h2><p class="muted">'+esc(s.label)+' · '+dateForDay(s.scheduled)+'</p></div><button class="smallbtn" id="schedClose">닫기</button></div>'+
+ '<span class="label">세션 전체 이동/병합</span><div class="target-grid">'+DAYS.map(function(d){const list=sessionsOn(d).filter(function(x){return x.d!==s.d}).concat([s]),risk=riskFor(list,d);return '<button data-move="'+d+'">'+d+'<br><small>'+dateForDay(d)+'</small><br><span class="risk '+risk.level.toLowerCase()+'">'+risk.level+'</span></button>'}).join('')+'</div>'+
+ '<span class="label">개별 운동 이동 / SPLIT</span>'+s.items.map(function(it,idx){return '<div class="session-card"><div class="row"><div><b>'+esc(it.name+' '+it.type)+'</b><small class="muted">예상 '+exerciseEstimate(it)+'분</small></div><select data-exmove="'+idx+'" style="border:1px solid #dbe3ec;border-radius:10px;padding:8px">'+DAYS.map(function(d){return '<option value="'+d+'" '+(d===s.scheduled?'selected':'')+'>'+d+'</option>'}).join('')+'</select></div></div>'}).join('')+
+ '<span class="label">이번 주 처리</span><select id="skipReason" class="textarea" style="min-height:44px"><option>Schedule Skip</option><option>Recovery Skip</option><option>Pain Skip</option><option>Program Decision</option><option>Equipment Issue</option><option>Other</option></select>'+
+ '<div class="actionrow"><button class="ghost" id="skipSession">이번 주 Skip</button><button class="ghost" id="carrySession">다음 주 Carry Over</button></div>'+
  '<button class="secondary" id="resetSession">원래 날짜로 복귀</button></div></div>';
  document.body.insertAdjacentHTML('beforeend',html);
  document.getElementById('schedClose').onclick=function(){document.getElementById('schedModal').remove()};
- document.querySelectorAll('[data-move]').forEach(function(b){b.onclick=function(){const target=b.dataset.move,list=sessionsOn(target).filter(function(x){return x.d!==s.d}).concat([s]),risk=riskFor(list,target);if(risk.level==='RED'&&!confirm('RED 조합입니다.\\n'+risk.reasons.join('\\n')+'\\n그래도 '+target+'로 이동/병합할까요?'))return;s.scheduled=target;s.status='PLANNED';s.skipReason=null;save();document.getElementById('schedModal').remove();render()}});
- document.getElementById('skipSession').onclick=function(){if(confirm('이 세션을 일정 사유로 Skip 처리할까요?')){s.status='SKIPPED';s.skipReason='Schedule Skip';save();document.getElementById('schedModal').remove();render()}};
- document.getElementById('carrySession').onclick=function(){if(confirm('이 세션을 다음 주로 Carry Over 처리할까요?')){s.status='CARRIED';s.skipReason='Carry Over';save();document.getElementById('schedModal').remove();render()}};
+ document.querySelectorAll('[data-move]').forEach(function(b){b.onclick=function(){const target=b.dataset.move,list=sessionsOn(target).filter(function(x){return x.d!==s.d}).concat([s]),risk=riskFor(list,target),test={};test[s.d]=target;const rw=recoveryWarnings(test);if((risk.level==='RED'||rw.length)&&!confirm((risk.level==='RED'?'RED 조합입니다.\n'+risk.reasons.join('\n')+'\n':'')+(rw.length?'회복 경고:\n'+rw.join('\n')+'\n':'')+'그래도 이동할까요?'))return;const from=s.scheduled;s.scheduled=target;s.status='PLANNED';s.skipReason=null;data.scheduleChanges.push({id:'sc-'+Date.now(),type:'MOVE_SESSION',week:data.week,session:s.d,from:from,to:target,createdAt:new Date().toISOString()});save();document.getElementById('schedModal').remove();render()}});
+ document.querySelectorAll('[data-exmove]').forEach(function(sel){sel.onchange=function(){const idx=Number(sel.dataset.exmove),target=sel.value;if(target===s.scheduled)return;if(confirm(s.items[idx].name+'을 '+target+'로 분리 이동할까요?')){document.getElementById('schedModal').remove();moveExercise(s.d,idx,target)}}});
+ document.getElementById('skipSession').onclick=function(){const reason=document.getElementById('skipReason').value;if(confirm('이 세션을 '+reason+' 처리할까요?')){s.status='SKIPPED';s.skipReason=reason;data.scheduleChanges.push({id:'skip-'+Date.now(),type:'SKIP',week:data.week,session:s.d,reason:reason,createdAt:new Date().toISOString()});save();document.getElementById('schedModal').remove();render()}};
+ document.getElementById('carrySession').onclick=function(){if(confirm('이 세션을 다음 주로 Carry Over 처리할까요?')){s.status='CARRIED';s.skipReason='Carry Over';data.scheduleChanges.push({id:'carry-'+Date.now(),type:'CARRY_OVER',week:data.week,session:s.d,createdAt:new Date().toISOString()});save();document.getElementById('schedModal').remove();render()}};
  document.getElementById('resetSession').onclick=function(){s.scheduled=s.d;s.status='PLANNED';s.skipReason=null;save();document.getElementById('schedModal').remove();render()};
 }
 function generateDraft(){
@@ -539,15 +622,19 @@ function confirmDraft(){
  data.week=data.draft.week;data.days=clone(data.draft.days);data.logs=[];data.recommendations=[];data.draft=null;data.scheduleProposal=null;save();tab='home';render();
 }
 function week(){
- const resolvedCount=data.days.filter(isResolved).length,resolved=resolvedCount===data.days.length,pending=pendingRecovery(),reviewReady=resolved&&pending.length===0;
- document.getElementById('app').innerHTML='<div class="top"><div><h1>주간 일정</h1><p class="sub">가능 시간 · 이동/병합 · 피로도</p></div><span class="pill">W'+data.week+'</span></div>'+
- '<section class="card"><div class="row"><h3>일별 가능 시간</h3><button id="savetime" class="smallbtn">저장</button></div><div class="timegrid">'+DAYS.map(function(d){return '<label><b>'+d+'</b><input data-time="'+d+'" type="number" value="'+(data.available[d]||0)+'"><small>분</small></label>'}).join('')+'</div><button class="secondary" id="autoPlan">자동 재배치 제안</button></section>'+
- (data.scheduleProposal?'<section class="card"><div class="row"><h3>자동 재배치 Draft</h3><button class="smallbtn" id="discardProposal">취소</button></div>'+data.scheduleProposal.map(function(p){return '<div class="proposal"><b>'+esc(p.label)+'</b><div class="muted">'+p.from+' → '+p.to+(p.from===p.to?' · 유지':'')+'</div></div>'}).join('')+'<button class="primary" id="applyProposal">이 일정 적용</button></section>':'')+
- '<section class="card"><h3>현재 배치</h3>'+DAYS.map(dayScheduleHtml).join('')+'</section>'+
- '<section class="card"><div class="row"><div><h3 style="margin:0">W'+data.week+' Review</h3><p class="muted">'+resolvedCount+' / '+data.days.length+' sessions resolved</p></div><span class="tag '+(reviewReady?'progress':pending.length?'review':'hold')+'">'+(reviewReady?'READY':pending.length?'RECOVERY PENDING':'IN PROGRESS')+'</span></div>'+
+ const resolvedCount=data.days.filter(isResolved).length,resolved=resolvedCount===data.days.length,pending=pendingRecovery(),reviewReady=resolved&&pending.length===0,rw=recoveryWarnings();
+ const trans=transitionSuggestion();
+ document.getElementById('app').innerHTML='<div class="top"><div><h1>주간 일정</h1><p class="sub">가능 시간 · SPLIT · 회복간격 · 피로도</p></div><span class="pill">W'+data.week+' · '+esc(currentBlock().name)+'</span></div>'+
+ (trans?'<section class="card"><div class="banner warn"><b>'+esc(trans.label)+' 전환 제안</b><br>'+esc(trans.reason)+'</div><button class="primary" data-block="'+trans.target+'">전환 승인</button></section>':'')+
+ '<section class="card"><div class="row"><h3>현재 주 실제 가능 시간</h3><button id="savetime" class="smallbtn">저장</button></div><div class="timegrid">'+DAYS.map(function(d){const date=dateForDay(d);return '<label><b>'+d+'</b><small>'+date.slice(5)+'</small><input data-date-time="'+date+'" type="number" value="'+availableMinutes(d)+'"><small>분</small></label>'}).join('')+'</div><button class="secondary" id="autoPlan">자동 재배치 제안</button></section>'+
+ (rw.length?'<section class="card"><div class="banner warn"><b>회복 간격 경고</b><br>'+rw.map(esc).join('<br>')+'</div></section>':'')+
+ (data.scheduleProposal?'<section class="card"><div class="row"><h3>자동 재배치 Draft</h3><button class="smallbtn" id="discardProposal">취소</button></div>'+data.scheduleProposal.map(function(p){return '<div class="proposal"><b>'+esc(p.label)+'</b><div class="muted">'+p.from+' → '+p.to+(p.from===p.to?' · 유지':'')+'</div></div>'}).join('')+(data.scheduleProposalWarnings&&data.scheduleProposalWarnings.length?'<div class="banner warn">'+data.scheduleProposalWarnings.map(esc).join('<br>')+'</div>':'')+'<button class="primary" id="applyProposal">이 일정 적용</button></section>':'')+
+ (data.volumeProposal?'<section class="card"><div class="row"><h3>Volume Reduction Draft</h3><button class="smallbtn" id="discardVolume">취소</button></div><p class="muted">'+data.volumeProposal.day+' · 예상 '+data.volumeProposal.total+'분 / 가능 '+data.volumeProposal.available+'분</p>'+data.volumeProposal.changes.map(function(ch){return '<div class="proposal"><b>'+esc(ch.name+' '+ch.type)+'</b><div class="muted">'+ch.before+'세트 → '+ch.after+'세트</div></div>'}).join('')+(data.volumeProposal.remainingShortage?'<div class="banner danger">감량 후에도 약 '+data.volumeProposal.remainingShortage+'분 부족. 세션 이동을 권장합니다.</div>':'')+'<button class="primary" id="applyVolume">이 감량안 적용</button></section>':'')+
+ '<section class="card"><h3>현재 배치</h3>'+DAYS.map(function(d){const base=dayScheduleHtml(d),short=estimateDay(d)>availableMinutes(d);return base+(short?'<button class="smallbtn" data-volume="'+d+'">시간 부족 해결안</button>':'')}).join('')+'</section>'+
+ '<section class="card"><div class="row"><div><h3 style="margin:0">W'+data.week+' Review</h3><p class="muted">'+resolvedCount+' / '+data.days.length+' sessions resolved · '+currentWeekState()+'</p></div><span class="tag '+(reviewReady?'progress':pending.length?'review':'hold')+'">'+(reviewReady?'READY':pending.length?'RECOVERY PENDING':'IN PROGRESS')+'</span></div>'+
  '<div class="reviewgrid">'+data.days.map(function(s){return '<div class="reviewrow"><div><b>'+s.d+' · '+esc(s.label)+'</b><small class="muted">'+s.status+(s.isCarryOver&&s.carriedFromWeek?' · from W'+s.carriedFromWeek:'')+(s.skipReason?' · '+esc(s.skipReason):'')+'</small></div><span>'+s.items.map(function(it){const r=getRec(s,it);return r?'<span class="tag '+resultClass(r.verdict)+'">'+r.verdict+(r.lowStreak!==null&&r.lowStreak!==undefined?' · '+r.lowStreak+'/2':'')+'</span>':''}).join(' ')+'</span></div>'}).join('')+'</div>'+
  (!data.draft?'<button class="primary '+(reviewReady?'':'disabled')+'" id="makeDraft">W'+(data.week+1)+' Draft 생성</button>':
- '<div class="draftbox"><div class="row"><b>W'+data.draft.week+' DRAFT</b><span class="pill">미확정</span></div>'+data.draft.days.map(function(s){return '<div class="proposal"><div class="row"><b>'+s.d+' · '+esc(s.label)+'</b>'+(s.isCarryOver?'<span class="tag review">CARRY OVER</span>':'')+'</div>'+s.items.map(function(it,idx){return '<div class="session-card"><div class="row"><div><b>'+esc(it.name+' '+it.type)+'</b><div class="muted">'+esc(segmentSummary(it))+'</div>'+(it.override?'<div class="muted">Override · '+esc(it.override.reason)+(it.override.note?' · '+esc(it.override.note):'')+'</div>':'')+'</div><button class="smallbtn" data-draft-edit="'+s.d+'|'+idx+'">'+(it.override?'수정됨':'수정')+'</button></div></div>'}).join('')+'</div>'}).join('')+'<div class="actionrow"><button class="ghost" id="discardDraft">Draft 삭제</button><button class="primary" id="confirmDraft" style="margin-top:0">W'+data.draft.week+' 확정</button></div></div>')+
+ '<div class="draftbox"><div class="row"><b>W'+data.draft.week+' DRAFT</b><span class="pill">DRAFT</span></div>'+data.draft.days.map(function(s){return '<div class="proposal"><div class="row"><b>'+s.d+' · '+esc(s.label)+'</b>'+(s.isCarryOver?'<span class="tag review">CARRY OVER</span>':'')+'</div>'+s.items.map(function(it,idx){return '<div class="session-card"><div class="row"><div><b>'+esc(it.name+' '+it.type)+'</b><div class="muted">'+esc(segmentSummary(it))+'</div>'+(it.override?'<div class="muted">Override · '+esc(it.override.reason)+(it.override.note?' · '+esc(it.override.note):'')+'</div>':'')+'</div><button class="smallbtn" data-draft-edit="'+s.d+'|'+idx+'">'+(it.override?'수정됨':'수정')+'</button></div></div>'}).join('')+'</div>'}).join('')+'<div class="actionrow"><button class="ghost" id="discardDraft">Draft 삭제</button><button class="primary" id="confirmDraft" style="margin-top:0">W'+data.draft.week+' 확정</button></div></div>')+
  '</section>';
 }
 function allExerciseLogs(){
@@ -616,8 +703,12 @@ function bind(){
  if(document.getElementById('addExtra'))document.getElementById('addExtra').onclick=function(){const segs=defaultSegments(workout.it),last=segs[segs.length-1],lastSet=workout.sets.filter(function(x){return (x.segmentId||last.id)===last.id}).slice(-1)[0];workout.extraSegmentId=last.id;weight=lastSet?lastSet.weight:last.weight;reps=lastSet?lastSet.reps:last.reps;rpe=lastSet?lastSet.rpe:8;persistWorkout();render()};
  if(document.getElementById('earlyFinish'))document.getElementById('earlyFinish').onclick=function(){if(!workout.sets.length)return alert('최소 한 세트를 기록한 뒤 조기 종료할 수 있습니다.');workout.earlyFinish=true;persistWorkout();renderEvaluation()};
  if(document.getElementById('finish'))document.getElementById('finish').onclick=renderEvaluation;
- if(document.getElementById('savetime'))document.getElementById('savetime').onclick=function(){document.querySelectorAll('[data-time]').forEach(function(x){data.available[x.dataset.time]=Number(x.value)||0});save();render()};
+ if(document.getElementById('savetime'))document.getElementById('savetime').onclick=function(){document.querySelectorAll('[data-date-time]').forEach(function(x){data.dateAvailability[x.dataset.dateTime]=Number(x.value)||0});save();render()};
  if(document.getElementById('autoPlan'))document.getElementById('autoPlan').onclick=autoReplan;
+ document.querySelectorAll('[data-volume]').forEach(function(b){b.onclick=function(){data.volumeProposal=buildVolumeProposal(b.dataset.volume);if(!data.volumeProposal)return alert('시간 부족이 없습니다.');save();render()}});
+ if(document.getElementById('applyVolume'))document.getElementById('applyVolume').onclick=applyVolumeProposal;
+ if(document.getElementById('discardVolume'))document.getElementById('discardVolume').onclick=function(){data.volumeProposal=null;save();render()};
+ document.querySelectorAll('[data-block]').forEach(function(b){b.onclick=function(){const target=b.dataset.block,old=data.program.currentBlockId;if(confirm(blockById(target).name+' 블록으로 전환할까요?')){data.blocks.forEach(function(x){x.status=x.id===target?'ACTIVE':x.id===old?'COMPLETED':x.status});data.program.currentBlockId=target;data.programHistory.push({at:new Date().toISOString(),type:'BLOCK_CHANGE',from:old,to:target});save();render()}}});
  if(document.getElementById('applyProposal'))document.getElementById('applyProposal').onclick=applyProposal;
  if(document.getElementById('discardProposal'))document.getElementById('discardProposal').onclick=function(){data.scheduleProposal=null;save();render()};
  if(document.getElementById('makeDraft'))document.getElementById('makeDraft').onclick=generateDraft;
