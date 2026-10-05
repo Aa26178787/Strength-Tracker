@@ -12,6 +12,99 @@
 
 .session-card{background:#f8fafc;border:1px solid #e7edf4;border-radius:15px;padding:12px;margin-top:10px}.session-card.red{border-color:#ffc7cc;background:#fff7f7}.session-card.yellow{border-color:#ffe0a8;background:#fffbf2}.risk{display:inline-flex;align-items:center;gap:5px;padding:4px 8px;border-radius:999px;font-size:10px;font-weight:900}.risk.green{background:#dcf8e8;color:#087c49}.risk.yellow{background:#fff0c9;color:#a76500}.risk.red{background:#ffe2e5;color:#c92e3b}.actionrow{display:grid;grid-template-columns:1fr 1fr;gap:8px}.actionrow button{border:0;border-radius:11px;min-height:42px;font-weight:800}.ghost{background:#eef2f7;color:#334155}.outline{background:#fff;border:1px solid #d7e0ea!important;color:#334155}.dayblock{margin-top:14px}.dayhead{display:flex;align-items:center;justify-content:space-between}.dayhead h3{margin:0}.statusline{font-size:11px;color:#7c8799;margin-top:3px}.reviewgrid{display:grid;gap:8px;margin-top:10px}.reviewrow{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center;padding:10px 0;border-top:1px solid #edf0f4}.draftbox{border:1px solid #cddcff;background:#f5f8ff;border-radius:15px;padding:13px;margin-top:10px}.modal-card{width:min(500px,calc(100% - 24px));background:#fff;border-radius:22px;padding:18px;margin:0 auto 14px;max-height:84vh;overflow:auto}.modal-center{position:fixed;inset:0;background:rgba(15,23,42,.55);display:grid;align-items:end;z-index:80;padding-bottom:env(safe-area-inset-bottom)}.target-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.target-grid button{border:0;border-radius:12px;padding:10px 6px;background:#eef3f8;font-weight:800}.choice-grid{display:flex;flex-wrap:wrap;gap:7px}.choice{border:0;border-radius:999px;padding:8px 10px;background:#eef2f7}.choice.sel{background:#1769ff;color:#fff}.textarea{width:100%;min-height:80px;border:1px solid #dbe3ec;border-radius:12px;padding:10px;resize:vertical}.proposal{padding:9px 0;border-top:1px solid #edf0f4}.disabled{opacity:.45;pointer-events:none}.banner{border-radius:14px;padding:12px;margin-top:10px;font-size:12px}.banner.info{background:#edf4ff;color:#2459b4}.banner.warn{background:#fff5df;color:#a96800;border-left:0}.banner.danger{background:#fff0f2;color:#b92937;border-left:0}
 
+
+/* ===== UI polish v1: spacing, wrapping, mobile overlap fixes ===== */
+html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
+body{overflow-x:hidden;line-height:1.45}
+button,input,select,textarea{font:inherit}
+button{touch-action:manipulation}
+.app{width:100%;overflow-x:hidden}
+.top{gap:12px;align-items:flex-start;flex-wrap:wrap}
+.top>*,.row>*,.history-item>*,.reviewrow>*{min-width:0}
+.top h1{line-height:1.22;letter-spacing:-.02em}
+.card{overflow:hidden}
+.card h2,.card h3{line-height:1.32;margin-top:0}
+.card h2{margin-bottom:8px}
+.card h3{margin-bottom:8px}
+.card p{line-height:1.55;margin-top:8px;margin-bottom:8px}
+.sub,.muted,.statusline,.exercise small,.history-item small,.reviewrow small,.session-card small{line-height:1.45}
+.row{flex-wrap:wrap;align-items:flex-start}
+.row>div:first-child{min-width:0}
+.pill,.tag,.risk{white-space:nowrap;flex:0 0 auto;max-width:100%}
+.exercise{gap:12px;align-items:flex-start;min-height:56px;line-height:1.35}
+.exercise>span:first-child{flex:1 1 auto;min-width:0}
+.exercise>span:last-child{flex:0 0 auto;max-width:42%;text-align:right}
+.exercise b{line-height:1.35;overflow-wrap:anywhere}
+.exercise small{margin-top:5px;overflow-wrap:anywhere;word-break:keep-all}
+.meet{align-items:flex-start}
+.meet>div{min-width:0}
+.meet b{line-height:1.3}
+.history-item{gap:12px;align-items:flex-start}
+.history-item>div:first-child{flex:1 1 auto;min-width:0}
+.history-item b,.history-item small{display:block}
+.history-item small{margin-top:5px}
+.reviewrow{grid-template-columns:minmax(0,1fr) auto;gap:10px 12px;align-items:start}
+.reviewrow>div{min-width:0}
+.reviewrow b,.reviewrow small{display:block}
+.reviewrow small{margin-top:4px}
+.session-card{overflow:hidden}
+.session-card .row{gap:10px}
+.proposal{line-height:1.45}
+.proposal>.row{align-items:flex-start}
+.proposal .muted{margin-top:4px}
+.banner{line-height:1.55;overflow-wrap:anywhere}
+.dayhead{gap:10px;align-items:flex-start}
+.dayhead>div{min-width:0}
+.dayhead h3{line-height:1.3}
+.timegrid{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.timegrid label{display:flex;flex-direction:column;gap:5px;min-width:0;padding:10px}
+.timegrid label>b,.timegrid label>small{line-height:1.3}
+.timegrid input,.timegrid select{min-width:0;height:36px;padding:4px 6px;border-radius:8px}
+.target-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.target-grid button{min-width:0;line-height:1.35}
+.actionrow{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.actionrow .primary,.actionrow .secondary,.actionrow .danger{margin-top:0}
+.primary,.secondary,.danger{padding:12px 14px;line-height:1.3}
+.smallbtn{line-height:1.25;white-space:normal;text-align:center}
+.choice-grid{gap:8px}
+.choice{line-height:1.25}
+.label{line-height:1.35;margin:20px 0 9px}
+.textarea{line-height:1.45}
+select.textarea{height:46px;min-height:46px!important;resize:none}
+.stepper{gap:10px}
+.stepper button,.stepper strong{min-width:0}
+.rpe{grid-template-columns:repeat(5,minmax(0,1fr));gap:8px}
+.rpe button{min-width:0;padding:8px 4px}
+.setrow{gap:12px;align-items:flex-start}
+.nav{backdrop-filter:blur(12px)}
+.nav button{min-width:0;line-height:1.25}
+.daygrid{gap:7px}
+.day small{display:block;line-height:1.2;overflow-wrap:anywhere}
+.modal-card{padding:20px 18px 24px}
+.modal-card .row{gap:10px}
+.modal-card h2{line-height:1.3;margin:0}
+.modal-card p{line-height:1.5}
+input,select,textarea{max-width:100%}
+@media (max-width:420px){
+  .app{padding:15px 12px calc(84px + env(safe-area-inset-bottom))}
+  .card{padding:14px;border-radius:16px}
+  .top h1{font-size:22px}
+  .pill,.tag{font-size:10px}
+  .timegrid{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+  .target-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .reviewrow{grid-template-columns:1fr}
+  .reviewrow>span{display:flex;flex-wrap:wrap;gap:5px}
+  .history-item{flex-wrap:wrap}
+  .history-item>span:last-child{margin-left:auto}
+  .exercise>span:last-child{max-width:36%}
+}
+@media (max-width:340px){
+  .timegrid,.target-grid,.actionrow{grid-template-columns:1fr!important}
+  .rpe{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .daygrid{grid-template-columns:repeat(5,minmax(0,1fr));gap:3px}
+  .dot{width:30px;height:30px}
+}
+
 </style>
 </head>
 <body>
@@ -22,7 +115,7 @@
 const STORAGE='strength-tracker-v1';
 const DAYS=['MON','TUE','WED','THU','FRI','SAT','SUN'];
 const seed={
- version:4,week:1,meet:'2026-11-29',
+ version:5,week:1,meet:'2026-11-29',
  program:{id:'program-001',name:'Long-term Strength 01',startDate:'2026-10-05',competitionDate:'2026-11-29',weightClass:67,increment:2.5,status:'ACTIVE',currentBlockId:'accumulation',weekMode:'TRAINING_COMPLETION'},
  blocks:[
   {id:'accumulation',name:'Accumulation',status:'ACTIVE'},
